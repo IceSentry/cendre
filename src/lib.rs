@@ -4,7 +4,6 @@ use std::{
     os::raw::c_char,
 };
 
-use anyhow::Context;
 use ash::{
     extensions::khr::{Surface, Swapchain},
     vk::SurfaceFormatKHR,
@@ -47,6 +46,7 @@ struct CendreRenderer {
     instance: Instance,
     swapchain_loader: Swapchain,
     swapchain: vk::SwapchainKHR,
+    surface_format: vk::SurfaceFormatKHR,
     acquire_semaphore: vk::Semaphore,
     release_semaphore: vk::Semaphore,
     present_queue: vk::Queue,
@@ -58,6 +58,38 @@ struct CendreRenderer {
 
 #[derive(Resource, Deref)]
 struct CendreDevice(pub Device);
+
+unsafe fn create_render_pass(
+    device: Device,
+    surface_format: &SurfaceFormatKHR,
+) -> anyhow::Result<vk::RenderPass> {
+    let color_attachment_refs = [vk::AttachmentReference {
+        attachment: 0,
+        layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+    }];
+    let depth_attachment_ref = vk::AttachmentReference {
+        attachment: 1,
+        layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+    let subpass = vk::SubpassDescription::default()
+        .color_attachments(&color_attachment_refs)
+        .depth_stencil_attachment(&depth_attachment_ref)
+        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS);
+
+    let attachment = vk::AttachmentDescription::default()
+        .format(surface_format.format)
+        .samples(vk::SampleCountFlags::TYPE_1)
+        .load_op(vk::AttachmentLoadOp::CLEAR)
+        .store_op(vk::AttachmentStoreOp::STORE)
+        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+        .initial_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+        .final_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL);
+    let create_info = vk::RenderPassCreateInfo::default()
+        .attachments(std::slice::from_ref(&attachment))
+        .subpasses(std::slice::from_ref(&subpass));
+    Ok(device.create_render_pass(&create_info, None)?)
+}
 
 fn update(cendre: Res<CendreRenderer>, device: Res<CendreDevice>) {
     unsafe {
@@ -102,21 +134,20 @@ fn update(cendre: Res<CendreRenderer>, device: Res<CendreDevice>) {
             .end_command_buffer(cendre.command_buffers[0])
             .unwrap();
 
-        let stage_mask = [vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT];
         let submits = [vk::SubmitInfo::default()
             .wait_semaphores(&acquire_semaphores)
-            .wait_dst_stage_mask(&stage_mask)
+            .wait_dst_stage_mask(std::slice::from_ref(
+                &vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            ))
             .command_buffers(&cendre.command_buffers)
             .signal_semaphores(&release_semaphores)];
         device
             .queue_submit(cendre.present_queue, &submits, vk::Fence::null())
             .unwrap();
 
-        let swapchains = [cendre.swapchain];
-        let indices = [image_index];
         let present_info = vk::PresentInfoKHR::default()
-            .swapchains(&swapchains)
-            .image_indices(&indices)
+            .swapchains(std::slice::from_ref(&cendre.swapchain))
+            .image_indices(std::slice::from_ref(&image_index))
             .wait_semaphores(&release_semaphores);
         cendre
             .swapchain_loader
@@ -160,14 +191,8 @@ fn init_vulkan(
             get_queue_family_index(&instance, &physical_device, &surface, &surface_loader)
                 .expect("Failed to find queue family index") as u32;
 
-        let device = create_device(
-            &instance,
-            &physical_device,
-            &surface,
-            &surface_loader,
-            queue_family_index,
-        )
-        .expect("Failed to create device");
+        let device = create_device(&instance, &physical_device, queue_family_index)
+            .expect("Failed to create device");
 
         let swapchain_loader = Swapchain::new(&instance, &device);
         let surface_format = surface_loader
@@ -226,6 +251,7 @@ fn init_vulkan(
             instance,
             swapchain_loader,
             swapchain,
+            surface_format,
             acquire_semaphore,
             release_semaphore,
             present_queue,
@@ -344,12 +370,10 @@ unsafe fn select_physical_device(instance: &Instance) -> Option<vk::PhysicalDevi
 unsafe fn create_device(
     instance: &Instance,
     physical_device: &vk::PhysicalDevice,
-    surface: &vk::SurfaceKHR,
-    surface_loader: &Surface,
     queue_family_index: u32,
 ) -> anyhow::Result<Device> {
     let queue_info = vk::DeviceQueueCreateInfo::default()
-        .queue_family_index(queue_family_index as u32)
+        .queue_family_index(queue_family_index)
         .queue_priorities(&[1.0]);
 
     let extension_names = [Swapchain::NAME.as_ptr()];
