@@ -6,5 +6,14 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ash = "0.37.2"
-bevy = { version = "0.10.1", default-features = false, features = ["bevy_winit"] }
+anyhow = "1.0.70"
+ash = { git = "https://github.com/ash-rs/ash.git", rev = "77e614d7766b17ef06c441ad28b419fed1329d07", features = [
+    "linked",
+    "debug",
+] }
+ash-window = { git = "https://github.com/ash-rs/ash.git", rev = "77e614d7766b17ef06c441ad28b419fed1329d07" }
+bevy = { version = "0.10.1", default-features = false, features = [
+    "bevy_winit",
+] }
+raw-window-handle = "0.5.2"
+winit = "0.28.3"
