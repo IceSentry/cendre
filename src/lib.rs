@@ -50,30 +50,27 @@ struct CendreRenderer {
     acquire_semaphore: vk::Semaphore,
     release_semaphore: vk::Semaphore,
     present_queue: vk::Queue,
-    present_images: Vec<vk::Image>,
-    present_image_views: Vec<vk::ImageView>,
+    swapchain_images: Vec<vk::Image>,
+    swapchain_image_views: Vec<vk::ImageView>,
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
+    render_pass: vk::RenderPass,
+    framebuffers: Vec<vk::Framebuffer>,
 }
 
 #[derive(Resource, Deref)]
 struct CendreDevice(pub Device);
 
 unsafe fn create_render_pass(
-    device: Device,
+    device: &Device,
     surface_format: &SurfaceFormatKHR,
 ) -> anyhow::Result<vk::RenderPass> {
     let color_attachment_refs = [vk::AttachmentReference {
         attachment: 0,
         layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
     }];
-    let depth_attachment_ref = vk::AttachmentReference {
-        attachment: 1,
-        layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-    };
     let subpass = vk::SubpassDescription::default()
         .color_attachments(&color_attachment_refs)
-        .depth_stencil_attachment(&depth_attachment_ref)
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS);
 
     let attachment = vk::AttachmentDescription::default()
@@ -91,7 +88,48 @@ unsafe fn create_render_pass(
     Ok(device.create_render_pass(&create_info, None)?)
 }
 
-fn update(cendre: Res<CendreRenderer>, device: Res<CendreDevice>) {
+unsafe fn create_frame_buffer(
+    device: &Device,
+    render_pass: &vk::RenderPass,
+    image_view: &vk::ImageView,
+    width: u32,
+    height: u32,
+) -> anyhow::Result<vk::Framebuffer> {
+    let create_info = vk::FramebufferCreateInfo::default()
+        .render_pass(*render_pass)
+        .attachments(std::slice::from_ref(image_view))
+        .width(width)
+        .height(height)
+        .layers(1);
+    Ok(device.create_framebuffer(&create_info, None)?)
+}
+
+unsafe fn create_image_view(
+    device: &Device,
+    surface_format: &vk::SurfaceFormatKHR,
+    image: vk::Image,
+) -> anyhow::Result<vk::ImageView> {
+    let create_view_info = vk::ImageViewCreateInfo::default()
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(surface_format.format)
+        .components(vk::ComponentMapping {
+            r: vk::ComponentSwizzle::R,
+            g: vk::ComponentSwizzle::G,
+            b: vk::ComponentSwizzle::B,
+            a: vk::ComponentSwizzle::A,
+        })
+        .subresource_range(
+            vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .layer_count(1)
+                .level_count(1),
+        )
+        .image(image);
+    Ok(device.create_image_view(&create_view_info, None)?)
+}
+
+fn update(cendre: Res<CendreRenderer>, device: Res<CendreDevice>, windows: Query<&Window>) {
+    let window = windows.single();
     unsafe {
         let acquire_semaphores = [cendre.acquire_semaphore];
         let release_semaphores = [cendre.release_semaphore];
@@ -116,19 +154,27 @@ fn update(cendre: Res<CendreRenderer>, device: Res<CendreDevice>) {
             .begin_command_buffer(cendre.command_buffers[0], &begin_info)
             .unwrap();
 
-        let ranges = [vk::ImageSubresourceRange::default()
-            .aspect_mask(vk::ImageAspectFlags::COLOR)
-            .level_count(1)
-            .layer_count(1)];
-        device.cmd_clear_color_image(
+        let render_pass_begin_info = vk::RenderPassBeginInfo::default()
+            .render_pass(cendre.render_pass)
+            .framebuffer(cendre.framebuffers[image_index as usize])
+            .render_area(vk::Rect2D::default().extent(vk::Extent2D {
+                width: window.physical_width(),
+                height: window.physical_height(),
+            }))
+            .clear_values(std::slice::from_ref(&vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [1.0, 0.0, 1.0, 1.0],
+                },
+            }));
+        device.cmd_begin_render_pass(
             cendre.command_buffers[0],
-            cendre.present_images[0],
-            vk::ImageLayout::GENERAL,
-            &vk::ClearColorValue {
-                float32: [1.0, 0.0, 1.0, 1.0],
-            },
-            &ranges,
+            &render_pass_begin_info,
+            vk::SubpassContents::INLINE,
         );
+
+        // draw calls go here
+
+        device.cmd_end_render_pass(cendre.command_buffers[0]);
 
         device
             .end_command_buffer(cendre.command_buffers[0])
@@ -222,28 +268,25 @@ fn init_vulkan(
         let release_semaphore = create_semaphore(&device).expect("Failed to create semaphore");
         let present_queue = device.get_device_queue(queue_family_index, 0);
 
-        let present_images = swapchain_loader.get_swapchain_images(swapchain).unwrap();
-        let present_image_views = present_images
+        let swapchain_images = swapchain_loader.get_swapchain_images(swapchain).unwrap();
+        let swapchain_image_views: Vec<vk::ImageView> = swapchain_images
             .iter()
-            .map(|&image| {
-                let create_view_info = vk::ImageViewCreateInfo::default()
-                    .view_type(vk::ImageViewType::TYPE_2D)
-                    .format(surface_format.format)
-                    .components(vk::ComponentMapping {
-                        r: vk::ComponentSwizzle::R,
-                        g: vk::ComponentSwizzle::G,
-                        b: vk::ComponentSwizzle::B,
-                        a: vk::ComponentSwizzle::A,
-                    })
-                    .subresource_range(vk::ImageSubresourceRange {
-                        aspect_mask: vk::ImageAspectFlags::COLOR,
-                        base_mip_level: 0,
-                        level_count: 1,
-                        base_array_layer: 0,
-                        layer_count: 1,
-                    })
-                    .image(image);
-                device.create_image_view(&create_view_info, None).unwrap()
+            .map(|&image| create_image_view(&device, &surface_format, image).unwrap())
+            .collect();
+
+        let render_pass = create_render_pass(&device, &surface_format).unwrap();
+
+        let framebuffers = swapchain_image_views
+            .iter()
+            .map(|image_view| {
+                create_frame_buffer(
+                    &device,
+                    &render_pass,
+                    image_view,
+                    winit_window.inner_size().width,
+                    winit_window.inner_size().height,
+                )
+                .unwrap()
             })
             .collect();
 
@@ -255,10 +298,12 @@ fn init_vulkan(
             acquire_semaphore,
             release_semaphore,
             present_queue,
-            present_images,
-            present_image_views,
+            swapchain_images,
+            swapchain_image_views,
             command_pool,
             command_buffers,
+            render_pass,
+            framebuffers,
         });
         commands.insert_resource(CendreDevice(device));
     };
@@ -302,6 +347,7 @@ unsafe fn create_swapchain(
         .image_array_layers(1)
         .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
         .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
+        .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
         .present_mode(present_mode);
     Ok(swapchain_loader.create_swapchain(&swapchain_create_info, None)?)
 }
