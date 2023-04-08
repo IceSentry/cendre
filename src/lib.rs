@@ -783,15 +783,18 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
 
         // DRAW
 
-        let viewport = vk::Viewport::default()
-            .width(window.physical_width() as f32)
-            .height(window.physical_height() as f32)
-            .max_depth(1.0);
-        let scissor = vk::Rect2D::default().extent(
-            vk::Extent2D::default()
-                .width(window.physical_width())
-                .height(window.physical_height()),
-        );
+        let width = window.physical_width();
+        let height = window.physical_height();
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: height as f32,
+            width: width as f32,
+            height: -(height as f32),
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        let scissor =
+            vk::Rect2D::default().extent(vk::Extent2D::default().width(width).height(height));
 
         device.cmd_set_viewport(command_buffer, 0, std::slice::from_ref(&viewport));
         device.cmd_set_scissor(command_buffer, 0, std::slice::from_ref(&scissor));
