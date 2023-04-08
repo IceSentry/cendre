@@ -18,7 +18,7 @@ fn compile_shaders() {
     {
         let extension = entry.extension().and_then(OsStr::to_str).unwrap();
         if extension == "spv" {
-            // skip already compile shader
+            // skip already compiled shader
             continue;
         }
 

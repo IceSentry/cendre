@@ -3,6 +3,8 @@
 #![allow(clippy::cast_possible_truncation)]
 #![allow(clippy::similar_names)]
 #![allow(clippy::cast_precision_loss)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::cast_sign_loss)]
 
 use std::{
     borrow::Cow,
@@ -19,7 +21,7 @@ use ash::{
     Device,
 };
 use ash::{vk, Entry, Instance};
-use bevy::{prelude::*, winit::WinitWindows};
+use bevy::{prelude::*, window::WindowResized, winit::WinitWindows};
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 pub struct CendrePlugin;
@@ -30,6 +32,7 @@ impl Plugin for CendrePlugin {
             // .add_startup_system(init_vulkan.after(hide_window))
             // .add_startup_system(show_window.after(init_vulkan))
             .add_startup_system(init_vulkan)
+            .add_system(resize.before(update))
             .add_system(update);
     }
 }
@@ -140,68 +143,155 @@ unsafe fn create_semaphore(device: &Device) -> anyhow::Result<vk::Semaphore> {
     Ok(device.create_semaphore(&semaphore_create_info, None)?)
 }
 
-unsafe fn create_swapchain(
-    swapchain_loader: &Swapchain,
-    surface_loader: &Surface,
-    surface: vk::SurfaceKHR,
-    surface_format: vk::SurfaceFormatKHR,
-    physical_device: vk::PhysicalDevice,
+struct CendreSwapchain {
+    swapchain: vk::SwapchainKHR,
+    images: Vec<vk::Image>,
+    image_views: Vec<vk::ImageView>,
+    framebuffers: Vec<vk::Framebuffer>,
     width: u32,
     height: u32,
-) -> anyhow::Result<vk::SwapchainKHR> {
-    let surface_capabilities =
-        surface_loader.get_physical_device_surface_capabilities(physical_device, surface)?;
+}
 
-    let mut desired_image_count = surface_capabilities.min_image_count + 1;
-    if surface_capabilities.max_image_count > 0
-        && desired_image_count > surface_capabilities.max_image_count
-    {
-        desired_image_count = surface_capabilities.max_image_count;
+impl CendreSwapchain {
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn new(
+        device: &Device,
+        swapchain_loader: &Swapchain,
+        surface_loader: &Surface,
+        surface: vk::SurfaceKHR,
+        surface_format: vk::SurfaceFormatKHR,
+        physical_device: vk::PhysicalDevice,
+        width: u32,
+        height: u32,
+        render_pass: vk::RenderPass,
+        old_swapchain: Option<vk::SwapchainKHR>,
+    ) -> Self {
+        let surface_capabilities = surface_loader
+            .get_physical_device_surface_capabilities(physical_device, surface)
+            .unwrap();
+
+        let mut desired_image_count = surface_capabilities.min_image_count + 1;
+        if surface_capabilities.max_image_count > 0
+            && desired_image_count > surface_capabilities.max_image_count
+        {
+            desired_image_count = surface_capabilities.max_image_count;
+        }
+
+        let surface_resolution = match surface_capabilities.current_extent.width {
+            std::u32::MAX => vk::Extent2D { width, height },
+            _ => surface_capabilities.current_extent,
+        };
+
+        let pre_transform = if surface_capabilities
+            .supported_transforms
+            .contains(vk::SurfaceTransformFlagsKHR::IDENTITY)
+        {
+            vk::SurfaceTransformFlagsKHR::IDENTITY
+        } else {
+            surface_capabilities.current_transform
+        };
+
+        let composite_alpha = match surface_capabilities.supported_composite_alpha {
+            vk::CompositeAlphaFlagsKHR::OPAQUE
+            | vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED
+            | vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED => {
+                surface_capabilities.supported_composite_alpha
+            }
+            _ => vk::CompositeAlphaFlagsKHR::INHERIT,
+        };
+
+        let present_mode = surface_loader
+            .get_physical_device_surface_present_modes(physical_device, surface)
+            .unwrap()
+            .iter()
+            .copied()
+            .find(|&mode| mode == vk::PresentModeKHR::MAILBOX)
+            .unwrap_or(vk::PresentModeKHR::FIFO);
+
+        let mut swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
+            .surface(surface)
+            .min_image_count(desired_image_count)
+            .image_format(surface_format.format)
+            .image_color_space(surface_format.color_space)
+            .image_extent(surface_resolution)
+            .image_array_layers(1)
+            .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+            .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .pre_transform(pre_transform)
+            .composite_alpha(composite_alpha)
+            .present_mode(present_mode);
+        if let Some(old_swapchain) = old_swapchain {
+            swapchain_create_info.old_swapchain = old_swapchain;
+        }
+        let swapchain = swapchain_loader
+            .create_swapchain(&swapchain_create_info, None)
+            .unwrap();
+
+        let images = swapchain_loader.get_swapchain_images(swapchain).unwrap();
+        let image_views: Vec<vk::ImageView> = images
+            .iter()
+            .map(|&image| create_image_view(device, surface_format, image).unwrap())
+            .collect();
+
+        let framebuffers = image_views
+            .iter()
+            .map(|image_view| {
+                create_frame_buffer(device, render_pass, *image_view, width, height)
+                    .expect("Failed to create frame buffer")
+            })
+            .collect();
+
+        Self {
+            swapchain,
+            images,
+            image_views,
+            framebuffers,
+            width,
+            height,
+        }
     }
 
-    let surface_resolution = match surface_capabilities.current_extent.width {
-        std::u32::MAX => vk::Extent2D { width, height },
-        _ => surface_capabilities.current_extent,
-    };
+    #[must_use]
+    unsafe fn resize(
+        &self,
+        device: &Device,
+        swapchain_loader: &Swapchain,
+        surface_loader: &Surface,
+        surface: vk::SurfaceKHR,
+        surface_format: vk::SurfaceFormatKHR,
+        physical_device: vk::PhysicalDevice,
+        width: u32,
+        height: u32,
+        render_pass: vk::RenderPass,
+    ) -> Self {
+        let new_swapchain = CendreSwapchain::new(
+            device,
+            swapchain_loader,
+            surface_loader,
+            surface,
+            surface_format,
+            physical_device,
+            width,
+            height,
+            render_pass,
+            Some(self.swapchain),
+        );
+        device.device_wait_idle().unwrap();
+        self.destroy(device, swapchain_loader);
+        new_swapchain
+    }
 
-    let pre_transform = if surface_capabilities
-        .supported_transforms
-        .contains(vk::SurfaceTransformFlagsKHR::IDENTITY)
-    {
-        vk::SurfaceTransformFlagsKHR::IDENTITY
-    } else {
-        surface_capabilities.current_transform
-    };
-
-    let composite_alpha = match surface_capabilities.supported_composite_alpha {
-        vk::CompositeAlphaFlagsKHR::OPAQUE
-        | vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED
-        | vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED => {
-            surface_capabilities.supported_composite_alpha
+    unsafe fn destroy(&self, device: &Device, swapchain_loader: &Swapchain) {
+        for framebuffer in &self.framebuffers {
+            device.destroy_framebuffer(*framebuffer, None);
         }
-        _ => vk::CompositeAlphaFlagsKHR::INHERIT,
-    };
 
-    let present_mode = surface_loader
-        .get_physical_device_surface_present_modes(physical_device, surface)?
-        .iter()
-        .copied()
-        .find(|&mode| mode == vk::PresentModeKHR::MAILBOX)
-        .unwrap_or(vk::PresentModeKHR::FIFO);
+        for image_view in &self.image_views {
+            device.destroy_image_view(*image_view, None);
+        }
 
-    let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
-        .surface(surface)
-        .min_image_count(desired_image_count)
-        .image_format(surface_format.format)
-        .image_color_space(surface_format.color_space)
-        .image_extent(surface_resolution)
-        .image_array_layers(1)
-        .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
-        .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
-        .pre_transform(pre_transform)
-        .composite_alpha(composite_alpha)
-        .present_mode(present_mode);
-    Ok(swapchain_loader.create_swapchain(&swapchain_create_info, None)?)
+        swapchain_loader.destroy_swapchain(self.swapchain, None);
+    }
 }
 
 unsafe fn create_instance(
@@ -509,21 +599,20 @@ fn image_barrier<'a>(
 struct CendreRenderer {
     instance: Instance,
     device: Device,
+    physical_device: vk::PhysicalDevice,
     debug_utils: DebugUtils,
     debug_utils_messenger: vk::DebugUtilsMessengerEXT,
     swapchain_loader: Swapchain,
-    swapchain: vk::SwapchainKHR,
+    swapchain: CendreSwapchain,
     surface_loader: Surface,
     surface: vk::SurfaceKHR,
+    surface_format: vk::SurfaceFormatKHR,
     acquire_semaphore: vk::Semaphore,
     release_semaphore: vk::Semaphore,
     present_queue: vk::Queue,
-    swapchain_images: Vec<vk::Image>,
-    swapchain_image_views: Vec<vk::ImageView>,
     command_pool: vk::CommandPool,
     command_buffers: Vec<vk::CommandBuffer>,
     render_pass: vk::RenderPass,
-    framebuffers: Vec<vk::Framebuffer>,
     pipeline_cache: vk::PipelineCache,
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
@@ -558,11 +647,14 @@ impl CendreRenderer {
         let device = create_device(&instance, &physical_device, queue_family_index as u32)
             .expect("Failed to create device");
 
-        let swapchain_loader = Swapchain::new(&instance, &device);
         let surface_format = get_surface_format(&surface_loader, physical_device, surface)
             .expect("Failed to get a surface format");
 
-        let swapchain = create_swapchain(
+        let render_pass = create_render_pass(&device, surface_format).unwrap();
+
+        let swapchain_loader = Swapchain::new(&instance, &device);
+        let swapchain = CendreSwapchain::new(
+            &device,
             &swapchain_loader,
             &surface_loader,
             surface,
@@ -570,8 +662,9 @@ impl CendreRenderer {
             physical_device,
             winit_window.inner_size().width,
             winit_window.inner_size().height,
-        )
-        .expect("Failed to create swapchain");
+            render_pass,
+            None,
+        );
 
         let command_pool = create_command_pool(&device, queue_family_index as u32);
 
@@ -585,12 +678,6 @@ impl CendreRenderer {
         let release_semaphore = create_semaphore(&device).expect("Failed to create semaphore");
         let present_queue = device.get_device_queue(queue_family_index as u32, 0);
 
-        let swapchain_images = swapchain_loader.get_swapchain_images(swapchain).unwrap();
-        let swapchain_image_views: Vec<vk::ImageView> = swapchain_images
-            .iter()
-            .map(|&image| create_image_view(&device, surface_format, image).unwrap())
-            .collect();
-
         let triangle_vs = load_shader(&device, "assets/shaders/triangle.vert.spv")
             .expect("Failed to load triangle vertex shader");
         let triangle_fs = load_shader(&device, "assets/shaders/triangle.frag.spv")
@@ -599,7 +686,6 @@ impl CendreRenderer {
         let create_info = vk::PipelineCacheCreateInfo::default();
         let pipeline_cache = device.create_pipeline_cache(&create_info, None).unwrap();
 
-        let render_pass = create_render_pass(&device, surface_format).unwrap();
         let pipeline_layout = create_pipeline_layout(&device).unwrap();
         let pipeline = create_graphics_pipeline(
             &device,
@@ -610,38 +696,24 @@ impl CendreRenderer {
             triangle_fs,
         )
         .expect("Failed to create graphics pipeline");
-        let framebuffers = swapchain_image_views
-            .iter()
-            .map(|image_view| {
-                create_frame_buffer(
-                    &device,
-                    render_pass,
-                    *image_view,
-                    winit_window.inner_size().width,
-                    winit_window.inner_size().height,
-                )
-                .expect("Failed to create frame buffer")
-            })
-            .collect();
 
         Self {
             instance,
             device,
+            physical_device,
             debug_utils,
             debug_utils_messenger,
             swapchain_loader,
             swapchain,
             surface_loader,
             surface,
+            surface_format,
             acquire_semaphore,
             release_semaphore,
             present_queue,
-            swapchain_images,
-            swapchain_image_views,
             command_pool,
             command_buffers,
             render_pass,
-            framebuffers,
             pipeline_cache,
             pipeline,
             pipeline_layout,
@@ -658,13 +730,7 @@ impl Drop for CendreRenderer {
 
             self.device.destroy_command_pool(self.command_pool, None);
 
-            for framebuffer in &self.framebuffers {
-                self.device.destroy_framebuffer(*framebuffer, None);
-            }
-
-            for image_view in &self.swapchain_image_views {
-                self.device.destroy_image_view(*image_view, None);
-            }
+            self.swapchain.destroy(&self.device, &self.swapchain_loader);
 
             self.device.destroy_pipeline(self.pipeline, None);
             self.device
@@ -679,9 +745,6 @@ impl Drop for CendreRenderer {
 
             self.device.destroy_semaphore(self.acquire_semaphore, None);
             self.device.destroy_semaphore(self.release_semaphore, None);
-
-            self.swapchain_loader
-                .destroy_swapchain(self.swapchain, None);
 
             self.device.destroy_device(None);
 
@@ -722,7 +785,7 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
         let (image_index, _) = cendre
             .swapchain_loader
             .acquire_next_image(
-                cendre.swapchain,
+                cendre.swapchain.swapchain,
                 0,
                 cendre.acquire_semaphore,
                 vk::Fence::null(),
@@ -744,7 +807,7 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
             .unwrap();
 
         let render_begin_barrier = image_barrier(
-            cendre.swapchain_images[image_index as usize],
+            cendre.swapchain.images[image_index as usize],
             vk::AccessFlags::empty(),
             vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
             vk::ImageLayout::UNDEFINED,
@@ -752,7 +815,7 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
         );
         device.cmd_pipeline_barrier(
             command_buffer,
-            vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
             vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
             vk::DependencyFlags::BY_REGION,
             &[],
@@ -769,10 +832,10 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
         };
         let render_pass_begin_info = vk::RenderPassBeginInfo::default()
             .render_pass(cendre.render_pass)
-            .framebuffer(cendre.framebuffers[image_index as usize])
+            .framebuffer(cendre.swapchain.framebuffers[image_index as usize])
             .render_area(vk::Rect2D::default().extent(vk::Extent2D {
-                width: window.physical_width(),
-                height: window.physical_height(),
+                width: cendre.swapchain.width,
+                height: cendre.swapchain.height,
             }))
             .clear_values(std::slice::from_ref(&clear_color));
         device.cmd_begin_render_pass(
@@ -785,6 +848,7 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
 
         let width = window.physical_width();
         let height = window.physical_height();
+
         let viewport = vk::Viewport {
             x: 0.0,
             y: height as f32,
@@ -811,7 +875,7 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
         device.cmd_end_render_pass(command_buffer);
 
         let render_end_barrier = image_barrier(
-            cendre.swapchain_images[image_index as usize],
+            cendre.swapchain.images[image_index as usize],
             vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
             vk::AccessFlags::empty(),
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
@@ -841,7 +905,7 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
             .unwrap();
 
         let present_info = vk::PresentInfoKHR::default()
-            .swapchains(std::slice::from_ref(&cendre.swapchain))
+            .swapchains(std::slice::from_ref(&cendre.swapchain.swapchain))
             .image_indices(std::slice::from_ref(&image_index))
             .wait_semaphores(&release_semaphores);
         cendre
@@ -855,4 +919,36 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
 
 unsafe fn c_char_buf_to_string<'a>(buf: *const c_char) -> Cow<'a, str> {
     unsafe { CStr::from_ptr(buf) }.to_string_lossy()
+}
+
+fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreRenderer>) {
+    if events.is_empty() {
+        return;
+    }
+    events.clear();
+    unsafe {
+        let surface_capabilities = cendre
+            .surface_loader
+            .get_physical_device_surface_capabilities(cendre.physical_device, cendre.surface)
+            .unwrap();
+
+        let new_width = surface_capabilities.current_extent.width;
+        let new_height = surface_capabilities.current_extent.height;
+        if cendre.swapchain.width == new_width && cendre.swapchain.height == new_height {
+            // FIXME: this will break with multiple windows
+            return;
+        }
+
+        cendre.swapchain = cendre.swapchain.resize(
+            &cendre.device,
+            &cendre.swapchain_loader,
+            &cendre.surface_loader,
+            cendre.surface,
+            cendre.surface_format,
+            cendre.physical_device,
+            new_width,
+            new_height,
+            cendre.render_pass,
+        );
+    }
 }
