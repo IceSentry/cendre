@@ -15,6 +15,8 @@ ash-window = { git = "https://github.com/ash-rs/ash.git", rev = "77e614d7766b17e
 bevy = { version = "0.10.1", default-features = false, features = [
     "bevy_winit",
 ] }
+meshopt = "0.1.9"
 naga = { version = "0.11.0", features = ["wgsl-in", "spv-out", "glsl-in"] }
 raw-window-handle = "0.5.2"
+tobj = "3.2.5"
 winit = "0.28.3"
