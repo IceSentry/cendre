@@ -1,3 +1,5 @@
+mod obj_loader;
+
 use std::{ffi::OsStr, io::Write};
 
 use anyhow::Context;
@@ -6,9 +8,11 @@ use bevy::{
     winit::WinitPlugin,
 };
 use naga::{valid::Capabilities, ShaderStage};
+use obj_loader::{LoadedObj, ObjLoaderPlugin};
 
 /// Compiles to spir-v any wgsl or glsl shaders found in ./assets/shaders
 /// For glsl it uses .frag.glsl and .vert.glsl to detect the shader stage
+// TODO use asset system for shaders
 fn compile_shaders() {
     for entry in std::fs::read_dir("./assets/shaders/")
         .unwrap()
@@ -90,8 +94,14 @@ fn main() -> anyhow::Result<()> {
         .add_plugin(WinitPlugin)
         .add_plugin(InputPlugin)
         .add_plugin(LogPlugin::default())
+        .add_plugin(AssetPlugin {
+            watch_for_changes: true,
+            ..default()
+        })
         .add_plugin(cendre::CendrePlugin)
+        .add_plugin(ObjLoaderPlugin)
         .add_system(exit_on_esc)
+        .add_system(load_mesh)
         .run();
 
     Ok(())
@@ -101,4 +111,10 @@ fn exit_on_esc(key_input: Res<Input<KeyCode>>, mut exit_events: EventWriter<AppE
     if key_input.just_pressed(KeyCode::Escape) {
         exit_events.send_default();
     }
+}
+
+#[derive(Resource)]
+struct LoadedMeshHandle(Handle<LoadedObj>);
+fn load_mesh(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.insert_resource(LoadedMeshHandle(asset_server.load("bunny.obj")));
 }

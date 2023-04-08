@@ -14,9 +14,12 @@ ash = { git = "https://github.com/ash-rs/ash.git", rev = "77e614d7766b17ef06c441
 ash-window = { git = "https://github.com/ash-rs/ash.git", rev = "77e614d7766b17ef06c441ad28b419fed1329d07" }
 bevy = { version = "0.10.1", default-features = false, features = [
     "bevy_winit",
+    "bevy_asset",
+    "bevy_render",
+    "filesystem_watcher",
 ] }
 meshopt = "0.1.9"
 naga = { version = "0.11.0", features = ["wgsl-in", "spv-out", "glsl-in"] }
 raw-window-handle = "0.5.2"
-tobj = "3.2.5"
+tobj = { version = "3.2.5", features = ["async"] }
 winit = "0.28.3"
