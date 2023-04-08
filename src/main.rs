@@ -14,17 +14,15 @@ fn compile_shaders() -> anyhow::Result<()> {
         .map(|res| res.map(|e| e.path()))
         .collect::<Result<Vec<_>, _>>()?
     {
+        let source = std::fs::read_to_string(entry.clone())?;
+
         let module = match entry.extension().and_then(OsStr::to_str) {
             Some("spv") => {
                 // skip already compiled spirv
                 continue;
             }
-            Some("wgsl") => {
-                let source = std::fs::read_to_string(entry.clone())?;
-                naga::front::wgsl::parse_str(&source)?
-            }
+            Some("wgsl") => naga::front::wgsl::parse_str(&source)?,
             Some("glsl") => {
-                let source = std::fs::read_to_string(entry.clone())?;
                 let mut parser = naga::front::glsl::Parser::default();
                 let file_name = entry.file_name().unwrap().to_string_lossy();
                 let options = if file_name.contains(".vert") {
