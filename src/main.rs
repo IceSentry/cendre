@@ -8,7 +8,7 @@ use bevy::{
     winit::WinitPlugin,
 };
 use naga::{valid::Capabilities, ShaderStage};
-use obj_loader::{LoadedObj, ObjLoaderPlugin};
+use obj_loader::{ObjBundle, ObjLoaderPlugin};
 
 /// Compiles to spir-v any wgsl or glsl shaders found in ./assets/shaders
 /// For glsl it uses .frag.glsl and .vert.glsl to detect the shader stage
@@ -100,8 +100,8 @@ fn main() -> anyhow::Result<()> {
         })
         .add_plugin(cendre::CendrePlugin)
         .add_plugin(ObjLoaderPlugin)
+        .add_startup_system(load_mesh)
         .add_system(exit_on_esc)
-        .add_system(load_mesh)
         .run();
 
     Ok(())
@@ -113,8 +113,8 @@ fn exit_on_esc(key_input: Res<Input<KeyCode>>, mut exit_events: EventWriter<AppE
     }
 }
 
-#[derive(Resource)]
-struct LoadedMeshHandle(Handle<LoadedObj>);
 fn load_mesh(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands.insert_resource(LoadedMeshHandle(asset_server.load("bunny.obj")));
+    commands.spawn(ObjBundle {
+        obj: asset_server.load("bunny.obj"),
+    });
 }
