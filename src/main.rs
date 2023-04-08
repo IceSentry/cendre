@@ -9,20 +9,24 @@ use naga::{valid::Capabilities, ShaderStage};
 
 /// Compiles to spir-v any wgsl or glsl shaders found in ./assets/shaders
 /// For glsl it uses .frag.glsl and .vert.glsl to detect the shader stage
-fn compile_shaders() -> anyhow::Result<()> {
-    for entry in std::fs::read_dir("./assets/shaders/")?
+fn compile_shaders() {
+    for entry in std::fs::read_dir("./assets/shaders/")
+        .unwrap()
         .map(|res| res.map(|e| e.path()))
-        .collect::<Result<Vec<_>, _>>()?
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
     {
-        let source = std::fs::read_to_string(entry.clone())?;
+        let extension = entry.extension().and_then(OsStr::to_str).unwrap();
+        if extension == "spv" {
+            // skip already compile shader
+            continue;
+        }
 
-        let module = match entry.extension().and_then(OsStr::to_str) {
-            Some("spv") => {
-                // skip already compiled spirv
-                continue;
-            }
-            Some("wgsl") => naga::front::wgsl::parse_str(&source)?,
-            Some("glsl") => {
+        let source = std::fs::read_to_string(entry.clone()).unwrap();
+
+        let module = match extension {
+            "wgsl" => naga::front::wgsl::parse_str(&source).unwrap(),
+            "glsl" => {
                 let mut parser = naga::front::glsl::Parser::default();
                 let file_name = entry.file_name().unwrap().to_string_lossy();
                 let options = if file_name.contains(".vert") {
@@ -34,7 +38,6 @@ fn compile_shaders() -> anyhow::Result<()> {
                 };
                 parser.parse(&options, &source).unwrap()
             }
-
             _ => panic!("Unknown shader format"),
         };
 
@@ -42,7 +45,8 @@ fn compile_shaders() -> anyhow::Result<()> {
             naga::valid::ValidationFlags::default(),
             Capabilities::all(),
         )
-        .validate(&module)?;
+        .validate(&module)
+        .unwrap();
         let spv = naga::back::spv::write_vec(
             &module,
             &module_info,
@@ -51,26 +55,27 @@ fn compile_shaders() -> anyhow::Result<()> {
                 ..naga::back::spv::Options::default()
             },
             None,
-        )?;
+        )
+        .unwrap();
         let mut path = entry;
         path.set_extension("spv");
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
             .open(path.clone())
-            .context(format!("Failed to open {path:?}"))?;
+            .context(format!("Failed to open {path:?}"))
+            .unwrap();
         file.write_all(
             &spv.iter()
                 .flat_map(|x| x.to_ne_bytes())
                 .collect::<Vec<u8>>(),
-        )?;
+        )
+        .unwrap();
     }
-
-    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
-    compile_shaders()?;
+    compile_shaders();
 
     App::new()
         .add_plugins(MinimalPlugins)
