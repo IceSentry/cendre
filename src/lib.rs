@@ -10,7 +10,7 @@ use std::{
     os::raw::c_char,
 };
 
-use anyhow::{bail, Context};
+use anyhow::bail;
 use ash::{
     extensions::{
         ext::DebugUtils,
@@ -51,27 +51,6 @@ impl Plugin for CendrePlugin {
 //         .expect("Failed to get winit window");
 //     winit_window.set_visible(true);
 // }
-
-#[derive(Resource)]
-struct CendreRenderer {
-    instance: Instance,
-    swapchain_loader: Swapchain,
-    swapchain: vk::SwapchainKHR,
-    surface_format: vk::SurfaceFormatKHR,
-    acquire_semaphore: vk::Semaphore,
-    release_semaphore: vk::Semaphore,
-    present_queue: vk::Queue,
-    swapchain_images: Vec<vk::Image>,
-    swapchain_image_views: Vec<vk::ImageView>,
-    command_pool: vk::CommandPool,
-    command_buffers: Vec<vk::CommandBuffer>,
-    render_pass: vk::RenderPass,
-    framebuffers: Vec<vk::Framebuffer>,
-    pipeline: vk::Pipeline,
-}
-
-#[derive(Resource, Deref)]
-struct CendreDevice(pub Device);
 
 unsafe fn create_render_pass(
     device: &Device,
@@ -265,49 +244,41 @@ unsafe fn create_instance(
     Ok(entry.create_instance(&create_info, None)?)
 }
 
-unsafe fn select_physical_device(instance: &Instance) -> Option<vk::PhysicalDevice> {
+unsafe fn select_physical_device(
+    instance: &Instance,
+    surface_loader: &Surface,
+    surface: vk::SurfaceKHR,
+) -> Option<(vk::PhysicalDevice, usize)> {
     let physical_devices = instance
         .enumerate_physical_devices()
         .expect("Failed to enumerate devices");
 
+    let mut fallback = None;
     for physical_device in &physical_devices {
         let props = instance.get_physical_device_properties(*physical_device);
+
+        let Some(queue_family_index) =
+            get_queue_family_index(instance, surface_loader, surface, *physical_device)
+        else {
+            continue;
+        };
+
         if props.device_type == vk::PhysicalDeviceType::DISCRETE_GPU {
             let device_name = c_char_buf_to_string(props.device_name.as_ptr());
-            info!("Using discrete GPU {}", device_name);
-            return Some(*physical_device);
+            info!("Using discrete GPU {:?}", device_name);
+            return Some((*physical_device, queue_family_index));
+        }
+
+        if fallback.is_none() {
+            fallback = Some((*physical_device, queue_family_index));
         }
     }
-
-    // Discrete gpu not found
-    if !physical_devices.is_empty() {
-        let fallback_device = physical_devices[0];
-        let props = instance.get_physical_device_properties(fallback_device);
+    if let Some((physical_device, _)) = fallback {
+        let props = instance.get_physical_device_properties(physical_device);
         let device_name = c_char_buf_to_string(props.device_name.as_ptr());
-        info!("Using fallback GPU {}", device_name);
-        return Some(fallback_device);
+        info!("Using fallback device {:?}", device_name);
     }
-    None
-}
-
-unsafe fn create_device(
-    instance: &Instance,
-    physical_device: &vk::PhysicalDevice,
-    queue_family_index: u32,
-) -> anyhow::Result<Device> {
-    let queue_info = vk::DeviceQueueCreateInfo::default()
-        .queue_family_index(queue_family_index)
-        .queue_priorities(&[1.0]);
-
-    let extension_names = [Swapchain::NAME.as_ptr()];
-    let features = vk::PhysicalDeviceFeatures::default();
-
-    let device_create_info = vk::DeviceCreateInfo::default()
-        .queue_create_infos(std::slice::from_ref(&queue_info))
-        .enabled_extension_names(&extension_names)
-        .enabled_features(&features);
-
-    Ok(instance.create_device(*physical_device, &device_create_info, None)?)
+    fallback
 }
 
 unsafe fn get_queue_family_index(
@@ -332,6 +303,26 @@ unsafe fn get_queue_family_index(
     None
 }
 
+unsafe fn create_device(
+    instance: &Instance,
+    physical_device: &vk::PhysicalDevice,
+    queue_family_index: u32,
+) -> anyhow::Result<Device> {
+    let queue_info = vk::DeviceQueueCreateInfo::default()
+        .queue_family_index(queue_family_index)
+        .queue_priorities(&[1.0]);
+
+    let extension_names = [Swapchain::NAME.as_ptr()];
+    let features = vk::PhysicalDeviceFeatures::default();
+
+    let device_create_info = vk::DeviceCreateInfo::default()
+        .queue_create_infos(std::slice::from_ref(&queue_info))
+        .enabled_extension_names(&extension_names)
+        .enabled_features(&features);
+
+    Ok(instance.create_device(*physical_device, &device_create_info, None)?)
+}
+
 unsafe fn load_shader(device: &Device, path: &str) -> anyhow::Result<vk::ShaderModule> {
     let mut shader_file = std::fs::File::open(path)?;
     let spv = ash::util::read_spv(&mut shader_file)?;
@@ -348,12 +339,11 @@ unsafe fn create_pipeline_layout(device: &Device) -> anyhow::Result<vk::Pipeline
 unsafe fn create_graphics_pipeline(
     device: &Device,
     pipeline_cache: vk::PipelineCache,
+    layout: vk::PipelineLayout,
     render_pass: vk::RenderPass,
     vertex_shader: vk::ShaderModule,
     fragment_shader: vk::ShaderModule,
 ) -> anyhow::Result<vk::Pipeline> {
-    let layout = create_pipeline_layout(device)?;
-
     let vertex_name = CString::new("vertex".to_string()).unwrap();
     let fragment_name = CString::new("fragment".to_string()).unwrap();
 
@@ -456,9 +446,8 @@ unsafe extern "system" fn vulkan_debug_callback(
     vk::FALSE
 }
 
-unsafe fn init_debug_callback(
-    entry: &Entry,
-    instance: &Instance,
+unsafe fn init_debug_utils_messenger(
+    debug_utils: &DebugUtils,
 ) -> anyhow::Result<vk::DebugUtilsMessengerEXT> {
     let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
         .message_severity(
@@ -473,9 +462,7 @@ unsafe fn init_debug_callback(
                 | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
         )
         .pfn_user_callback(Some(vulkan_debug_callback));
-
-    let debug_utils_loader = DebugUtils::new(entry, instance);
-    Ok(debug_utils_loader.create_debug_utils_messenger(&debug_info, None)?)
+    Ok(debug_utils.create_debug_utils_messenger(&debug_info, None)?)
 }
 
 unsafe fn get_surface_format(
@@ -518,24 +505,42 @@ fn image_barrier<'a>(
         .subresource_range(subresource_range)
 }
 
-fn init_vulkan(
-    mut commands: Commands,
-    windows: Query<Entity, With<Window>>,
-    winit_windows: NonSendMut<WinitWindows>,
-) {
-    let winit_window = windows
-        .get_single()
-        .ok()
-        .and_then(|window_id| winit_windows.get_window(window_id))
-        .expect("Failed to get winit window");
+#[derive(Resource)]
+struct CendreRenderer {
+    instance: Instance,
+    device: Device,
+    debug_utils: DebugUtils,
+    debug_utils_messenger: vk::DebugUtilsMessengerEXT,
+    swapchain_loader: Swapchain,
+    swapchain: vk::SwapchainKHR,
+    surface_loader: Surface,
+    surface: vk::SurfaceKHR,
+    acquire_semaphore: vk::Semaphore,
+    release_semaphore: vk::Semaphore,
+    present_queue: vk::Queue,
+    swapchain_images: Vec<vk::Image>,
+    swapchain_image_views: Vec<vk::ImageView>,
+    command_pool: vk::CommandPool,
+    command_buffers: Vec<vk::CommandBuffer>,
+    render_pass: vk::RenderPass,
+    framebuffers: Vec<vk::Framebuffer>,
+    pipeline_cache: vk::PipelineCache,
+    pipeline: vk::Pipeline,
+    pipeline_layout: vk::PipelineLayout,
+    triangle_vs: vk::ShaderModule,
+    triangle_fs: vk::ShaderModule,
+}
 
-    unsafe {
+impl CendreRenderer {
+    #[allow(clippy::too_many_lines)]
+    unsafe fn init(winit_window: &winit::window::Window) -> Self {
         let entry = Entry::linked();
         let instance =
             create_instance(&entry, "Cendre", winit_window).expect("Failed to create instance");
 
-        #[cfg(debug_assertions)]
-        init_debug_callback(&entry, &instance).unwrap();
+        let debug_utils = DebugUtils::new(&entry, &instance);
+        let debug_utils_messenger =
+            init_debug_utils_messenger(&debug_utils).expect("Failed to init debug utils messenger");
 
         let surface = ash_window::create_surface(
             &entry,
@@ -547,14 +552,10 @@ fn init_vulkan(
         .expect("Failed to create surface");
         let surface_loader = Surface::new(&entry, &instance);
 
-        let physical_device =
-            select_physical_device(&instance).expect("No physical device available");
+        let (physical_device, queue_family_index) =
+            select_physical_device(&instance, &surface_loader, surface).expect("No GPU found");
 
-        let queue_family_index =
-            get_queue_family_index(&instance, &surface_loader, surface, physical_device)
-                .expect("Failed to find queue family index") as u32;
-
-        let device = create_device(&instance, &physical_device, queue_family_index)
+        let device = create_device(&instance, &physical_device, queue_family_index as u32)
             .expect("Failed to create device");
 
         let swapchain_loader = Swapchain::new(&instance, &device);
@@ -572,7 +573,7 @@ fn init_vulkan(
         )
         .expect("Failed to create swapchain");
 
-        let command_pool = create_command_pool(&device, queue_family_index);
+        let command_pool = create_command_pool(&device, queue_family_index as u32);
 
         let allocate_info = vk::CommandBufferAllocateInfo::default()
             .command_pool(command_pool)
@@ -582,7 +583,7 @@ fn init_vulkan(
 
         let acquire_semaphore = create_semaphore(&device).expect("Failed to create semaphore");
         let release_semaphore = create_semaphore(&device).expect("Failed to create semaphore");
-        let present_queue = device.get_device_queue(queue_family_index, 0);
+        let present_queue = device.get_device_queue(queue_family_index as u32, 0);
 
         let swapchain_images = swapchain_loader.get_swapchain_images(swapchain).unwrap();
         let swapchain_image_views: Vec<vk::ImageView> = swapchain_images
@@ -599,14 +600,16 @@ fn init_vulkan(
         let pipeline_cache = device.create_pipeline_cache(&create_info, None).unwrap();
 
         let render_pass = create_render_pass(&device, surface_format).unwrap();
+        let pipeline_layout = create_pipeline_layout(&device).unwrap();
         let pipeline = create_graphics_pipeline(
             &device,
             pipeline_cache,
+            pipeline_layout,
             render_pass,
             triangle_vs,
             triangle_fs,
         )
-        .unwrap();
+        .expect("Failed to create graphics pipeline");
         let framebuffers = swapchain_image_views
             .iter()
             .map(|image_view| {
@@ -617,15 +620,19 @@ fn init_vulkan(
                     winit_window.inner_size().width,
                     winit_window.inner_size().height,
                 )
-                .unwrap()
+                .expect("Failed to create frame buffer")
             })
             .collect();
 
-        commands.insert_resource(CendreRenderer {
+        Self {
             instance,
+            device,
+            debug_utils,
+            debug_utils_messenger,
             swapchain_loader,
             swapchain,
-            surface_format,
+            surface_loader,
+            surface,
             acquire_semaphore,
             release_semaphore,
             present_queue,
@@ -635,18 +642,82 @@ fn init_vulkan(
             command_buffers,
             render_pass,
             framebuffers,
+            pipeline_cache,
             pipeline,
-        });
-        commands.insert_resource(CendreDevice(device));
+            pipeline_layout,
+            triangle_vs,
+            triangle_fs,
+        }
+    }
+}
+
+impl Drop for CendreRenderer {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.device_wait_idle().unwrap();
+
+            self.device.destroy_command_pool(self.command_pool, None);
+
+            for framebuffer in &self.framebuffers {
+                self.device.destroy_framebuffer(*framebuffer, None);
+            }
+
+            for image_view in &self.swapchain_image_views {
+                self.device.destroy_image_view(*image_view, None);
+            }
+
+            self.device.destroy_pipeline(self.pipeline, None);
+            self.device
+                .destroy_pipeline_layout(self.pipeline_layout, None);
+            self.device
+                .destroy_pipeline_cache(self.pipeline_cache, None);
+
+            self.device.destroy_shader_module(self.triangle_vs, None);
+            self.device.destroy_shader_module(self.triangle_fs, None);
+
+            self.device.destroy_render_pass(self.render_pass, None);
+
+            self.device.destroy_semaphore(self.acquire_semaphore, None);
+            self.device.destroy_semaphore(self.release_semaphore, None);
+
+            self.swapchain_loader
+                .destroy_swapchain(self.swapchain, None);
+
+            self.device.destroy_device(None);
+
+            self.surface_loader.destroy_surface(self.surface, None);
+
+            self.debug_utils
+                .destroy_debug_utils_messenger(self.debug_utils_messenger, None);
+
+            self.instance.destroy_instance(None);
+        }
+    }
+}
+
+fn init_vulkan(
+    mut commands: Commands,
+    windows: Query<Entity, With<Window>>,
+    winit_windows: NonSendMut<WinitWindows>,
+) {
+    let winit_window = windows
+        .get_single()
+        .ok()
+        .and_then(|window_id| winit_windows.get_window(window_id))
+        .expect("Failed to get winit window");
+
+    unsafe {
+        commands.insert_resource(CendreRenderer::init(winit_window));
     };
 }
 
 #[allow(clippy::too_many_lines)]
-fn update(cendre: Res<CendreRenderer>, device: Res<CendreDevice>, windows: Query<&Window>) {
+fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
     let window = windows.single();
     unsafe {
         let acquire_semaphores = [cendre.acquire_semaphore];
         let release_semaphores = [cendre.release_semaphore];
+        let device = &cendre.device;
 
         let (image_index, _) = cendre
             .swapchain_loader
