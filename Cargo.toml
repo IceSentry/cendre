@@ -19,6 +19,10 @@ bevy = { version = "0.10.1", default-features = false, features = [
     "bevy_render",
     "filesystem_watcher",
 ] }
+bytemuck = "1.13.1"
+# gpu-allocator = "0.22.0"
+# Use a patched version that uses the git version of ash
+gpu-allocator = { path = "../gpu-allocator" }
 meshopt = "0.1.9"
 naga = { version = "0.11.0", features = ["wgsl-in", "spv-out", "glsl-in"] }
 raw-window-handle = "0.5.2"

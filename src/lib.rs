@@ -5,11 +5,17 @@
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::cast_sign_loss)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
+
+pub mod obj_loader;
 
 use std::{
     borrow::Cow,
     ffi::{CStr, CString},
     os::raw::c_char,
+    time::Instant,
 };
 
 use anyhow::bail;
@@ -22,6 +28,11 @@ use ash::{
 };
 use ash::{vk, Entry, Instance};
 use bevy::{prelude::*, window::WindowResized, winit::WinitWindows};
+use gpu_allocator::{
+    vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, Allocator, AllocatorCreateDesc},
+    MemoryLocation,
+};
+use obj_loader::OptimizedMesh;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 pub struct CendrePlugin;
@@ -33,6 +44,7 @@ impl Plugin for CendrePlugin {
             // .add_startup_system(show_window.after(init_vulkan))
             .add_startup_system(init_vulkan)
             .add_system(resize.before(update))
+            .add_system(prepare_mesh.before(update))
             .add_system(update);
     }
 }
@@ -303,7 +315,7 @@ fn create_instance(
     entry: &Entry,
     app_name: &str,
     winit_window: &winit::window::Window,
-) -> anyhow::Result<Instance> {
+) -> anyhow::Result<ash::Instance> {
     let app_name = CString::new(app_name.to_string())?;
 
     let app_info = vk::ApplicationInfo::default()
@@ -402,26 +414,6 @@ fn get_queue_family_index(
     None
 }
 
-fn create_device(
-    instance: &Instance,
-    physical_device: &vk::PhysicalDevice,
-    queue_family_index: u32,
-) -> anyhow::Result<Device> {
-    let queue_info = vk::DeviceQueueCreateInfo::default()
-        .queue_family_index(queue_family_index)
-        .queue_priorities(&[1.0]);
-
-    let extension_names = [Swapchain::NAME.as_ptr()];
-    let features = vk::PhysicalDeviceFeatures::default();
-
-    let device_create_info = vk::DeviceCreateInfo::default()
-        .queue_create_infos(std::slice::from_ref(&queue_info))
-        .enabled_extension_names(&extension_names)
-        .enabled_features(&features);
-
-    Ok(unsafe { instance.create_device(*physical_device, &device_create_info, None)? })
-}
-
 fn load_shader(device: &Device, path: &str) -> anyhow::Result<vk::ShaderModule> {
     let mut shader_file = std::fs::File::open(path)?;
     let spv = ash::util::read_spv(&mut shader_file)?;
@@ -457,7 +449,29 @@ fn create_graphics_pipeline(
             .name(&fragment_name),
     ];
 
-    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
+    let stream = vk::VertexInputBindingDescription {
+        binding: 0,
+        stride: 32,
+        input_rate: vk::VertexInputRate::VERTEX,
+    };
+    let attrs = vec![
+        vk::VertexInputAttributeDescription::default()
+            .location(0)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(0),
+        vk::VertexInputAttributeDescription::default()
+            .location(1)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(12),
+        vk::VertexInputAttributeDescription::default()
+            .location(2)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset(24),
+    ];
+
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
+        .vertex_attribute_descriptions(&attrs)
+        .vertex_binding_descriptions(std::slice::from_ref(&stream));
 
     let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::default()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
@@ -603,6 +617,57 @@ fn image_barrier<'a>(
         .subresource_range(subresource_range)
 }
 
+struct Buffer {
+    raw: vk::Buffer,
+    allocation: Option<Allocation>,
+}
+
+impl Buffer {
+    fn new(
+        device: &Device,
+        allocator: &mut Allocator,
+        size: u64,
+        usage: vk::BufferUsageFlags,
+    ) -> anyhow::Result<Self> {
+        let vk_info = vk::BufferCreateInfo::default().size(size).usage(usage);
+        let buffer = unsafe { device.create_buffer(&vk_info, None) }.unwrap();
+        let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+        let allocation = allocator.allocate(&AllocationCreateDesc {
+            name: "Buffer allocation",
+            requirements,
+            location: MemoryLocation::CpuToGpu,
+            linear: true, // Buffers are always linear
+            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+        })?;
+
+        // Bind memory to the buffer
+        unsafe {
+            device
+                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+                .unwrap();
+        };
+        Ok(Self {
+            raw: buffer,
+            allocation: Some(allocation),
+        })
+    }
+
+    fn write(&mut self, data: &[u8]) {
+        if let Some(slice) = self
+            .allocation
+            .as_mut()
+            .and_then(gpu_allocator::vulkan::Allocation::mapped_slice_mut)
+        {
+            slice[..data.len()].copy_from_slice(data);
+        }
+    }
+
+    fn destroy(&mut self, device: &Device, allocator: &mut Allocator) {
+        unsafe { device.destroy_buffer(self.raw, None) };
+        allocator.free(self.allocation.take().unwrap()).unwrap();
+    }
+}
+
 #[derive(Resource)]
 struct CendreRenderer {
     instance: Instance,
@@ -626,6 +691,9 @@ struct CendreRenderer {
     pipeline_layout: vk::PipelineLayout,
     triangle_vs: vk::ShaderModule,
     triangle_fs: vk::ShaderModule,
+    allocator: Option<Allocator>,
+    vertex_buffer: Buffer,
+    index_buffer: Buffer,
 }
 
 impl CendreRenderer {
@@ -654,8 +722,26 @@ impl CendreRenderer {
         let (physical_device, queue_family_index) =
             select_physical_device(&instance, &surface_loader, surface).expect("No GPU found");
 
-        let device = create_device(&instance, &physical_device, queue_family_index as u32)
-            .expect("Failed to create device");
+        let queue_info = vk::DeviceQueueCreateInfo::default()
+            .queue_family_index(queue_family_index as u32)
+            .queue_priorities(&[1.0]);
+
+        let extension_names = [Swapchain::NAME.as_ptr()];
+        let features = vk::PhysicalDeviceFeatures::default();
+
+        let mut physical_device_buffer_device_address_features =
+            vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
+        let device_create_info = vk::DeviceCreateInfo::default()
+            .queue_create_infos(std::slice::from_ref(&queue_info))
+            .enabled_extension_names(&extension_names)
+            .enabled_features(&features)
+            .push_next(&mut physical_device_buffer_device_address_features);
+
+        let device = unsafe {
+            instance
+                .create_device(physical_device, &device_create_info, None)
+                .unwrap()
+        };
 
         let surface_format = get_surface_format(&surface_loader, physical_device, surface)
             .expect("Failed to get a surface format");
@@ -707,6 +793,32 @@ impl CendreRenderer {
         )
         .expect("Failed to create graphics pipeline");
 
+        let buffer_device_address =
+            physical_device_buffer_device_address_features.buffer_device_address == 1;
+        let mut allocator = Allocator::new(&AllocatorCreateDesc {
+            instance: instance.clone(),
+            device: device.clone(),
+            physical_device,
+            debug_settings: default(),
+            buffer_device_address,
+        })
+        .unwrap();
+
+        let vertex_buffer = Buffer::new(
+            &device,
+            &mut allocator,
+            128 * 1024 * 1024,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+        )
+        .unwrap();
+        let index_buffer = Buffer::new(
+            &device,
+            &mut allocator,
+            128 * 1024 * 1024,
+            vk::BufferUsageFlags::INDEX_BUFFER,
+        )
+        .unwrap();
+
         Self {
             instance,
             device,
@@ -729,6 +841,9 @@ impl CendreRenderer {
             pipeline_layout,
             triangle_vs,
             triangle_fs,
+            allocator: Some(allocator),
+            vertex_buffer,
+            index_buffer,
         }
     }
 }
@@ -739,6 +854,11 @@ impl Drop for CendreRenderer {
             self.device.device_wait_idle().unwrap();
 
             self.device.destroy_command_pool(self.command_pool, None);
+
+            self.vertex_buffer
+                .destroy(&self.device, self.allocator.as_mut().unwrap());
+            self.index_buffer
+                .destroy(&self.device, self.allocator.as_mut().unwrap());
 
             self.swapchain.destroy(&self.device, &self.swapchain_loader);
 
@@ -755,6 +875,8 @@ impl Drop for CendreRenderer {
 
             self.device.destroy_semaphore(self.acquire_semaphore, None);
             self.device.destroy_semaphore(self.release_semaphore, None);
+
+            drop(self.allocator.take().unwrap());
 
             self.device.destroy_device(None);
 
@@ -782,8 +904,37 @@ fn init_vulkan(
     commands.insert_resource(CendreRenderer::init(winit_window));
 }
 
+#[derive(Resource)]
+struct IndexCount(pub u32);
+
+fn prepare_mesh(
+    mut commands: Commands,
+    mut cendre: ResMut<CendreRenderer>,
+    mut meshes: Query<&mut OptimizedMesh>,
+) {
+    for mut mesh in &mut meshes {
+        if !mesh.prepared {
+            info!("preparing mesh");
+            let start = Instant::now();
+
+            cendre.vertex_buffer.write(&mesh.vertex_buffer);
+            cendre.index_buffer.write(&mesh.index_buffer);
+            commands.insert_resource(IndexCount(
+                (mesh.index_buffer.len() / std::mem::size_of::<u32>()) as u32,
+            ));
+
+            info!("mesh prepared in {}ms", start.elapsed().as_millis());
+            mesh.prepared = true;
+        }
+    }
+}
+
 #[allow(clippy::too_many_lines)]
-fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
+fn update(
+    cendre: Res<CendreRenderer>,
+    windows: Query<&Window>,
+    index_count: Option<Res<IndexCount>>,
+) {
     let window = windows.single();
     let acquire_semaphores = [cendre.acquire_semaphore];
     let release_semaphores = [cendre.release_semaphore];
@@ -811,22 +962,22 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
 
     // BEGIN
 
-    let begin_info =
-        vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
     unsafe {
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
         device
             .begin_command_buffer(command_buffer, &begin_info)
             .unwrap();
     }
 
-    let render_begin_barrier = image_barrier(
-        cendre.swapchain.images[image_index as usize],
-        vk::AccessFlags::empty(),
-        vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-        vk::ImageLayout::UNDEFINED,
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-    );
     unsafe {
+        let render_begin_barrier = image_barrier(
+            cendre.swapchain.images[image_index as usize],
+            vk::AccessFlags::empty(),
+            vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        );
         device.cmd_pipeline_barrier(
             command_buffer,
             vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
@@ -840,20 +991,20 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
 
     // CLEAR
 
-    let clear_color = vk::ClearValue {
-        color: vk::ClearColorValue {
-            float32: [0.3, 0.3, 0.3, 1.0],
-        },
-    };
-    let render_pass_begin_info = vk::RenderPassBeginInfo::default()
-        .render_pass(cendre.render_pass)
-        .framebuffer(cendre.swapchain.framebuffers[image_index as usize])
-        .render_area(vk::Rect2D::default().extent(vk::Extent2D {
-            width: cendre.swapchain.width,
-            height: cendre.swapchain.height,
-        }))
-        .clear_values(std::slice::from_ref(&clear_color));
     unsafe {
+        let clear_color = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0.3, 0.3, 0.3, 1.0],
+            },
+        };
+        let render_pass_begin_info = vk::RenderPassBeginInfo::default()
+            .render_pass(cendre.render_pass)
+            .framebuffer(cendre.swapchain.framebuffers[image_index as usize])
+            .render_area(vk::Rect2D::default().extent(vk::Extent2D {
+                width: cendre.swapchain.width,
+                height: cendre.swapchain.height,
+            }))
+            .clear_values(std::slice::from_ref(&clear_color));
         device.cmd_begin_render_pass(
             command_buffer,
             &render_pass_begin_info,
@@ -886,8 +1037,29 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
             cendre.pipeline,
         );
     }
+
     unsafe {
-        device.cmd_draw(command_buffer, 3, 1, 0, 0);
+        device.cmd_bind_vertex_buffers(
+            command_buffer,
+            0,
+            std::slice::from_ref(&cendre.vertex_buffer.raw),
+            &[0],
+        );
+    }
+    unsafe {
+        device.cmd_bind_index_buffer(
+            command_buffer,
+            cendre.index_buffer.raw,
+            0,
+            vk::IndexType::UINT32,
+        );
+    }
+
+    unsafe {
+        // device.cmd_draw(command_buffer, 3, 1, 0, 0);
+        if let Some(index_count) = index_count {
+            device.cmd_draw_indexed(command_buffer, index_count.0, 1, 0, 0, 0);
+        }
     }
 
     // END
@@ -896,14 +1068,14 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
         device.cmd_end_render_pass(command_buffer);
     }
 
-    let render_end_barrier = image_barrier(
-        cendre.swapchain.images[image_index as usize],
-        vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-        vk::AccessFlags::empty(),
-        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-        vk::ImageLayout::PRESENT_SRC_KHR,
-    );
     unsafe {
+        let render_end_barrier = image_barrier(
+            cendre.swapchain.images[image_index as usize],
+            vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            vk::AccessFlags::empty(),
+            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            vk::ImageLayout::PRESENT_SRC_KHR,
+        );
         device.cmd_pipeline_barrier(
             command_buffer,
             vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
@@ -919,24 +1091,24 @@ fn update(cendre: Res<CendreRenderer>, windows: Query<&Window>) {
         device.end_command_buffer(command_buffer).unwrap();
     }
 
-    let submits = [vk::SubmitInfo::default()
-        .wait_semaphores(&acquire_semaphores)
-        .wait_dst_stage_mask(std::slice::from_ref(
-            &vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-        ))
-        .command_buffers(&cendre.command_buffers)
-        .signal_semaphores(&release_semaphores)];
     unsafe {
+        let submits = [vk::SubmitInfo::default()
+            .wait_semaphores(&acquire_semaphores)
+            .wait_dst_stage_mask(std::slice::from_ref(
+                &vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            ))
+            .command_buffers(&cendre.command_buffers)
+            .signal_semaphores(&release_semaphores)];
         device
             .queue_submit(cendre.present_queue, &submits, vk::Fence::null())
             .unwrap();
     }
 
-    let present_info = vk::PresentInfoKHR::default()
-        .swapchains(std::slice::from_ref(&cendre.swapchain.swapchain))
-        .image_indices(std::slice::from_ref(&image_index))
-        .wait_semaphores(&release_semaphores);
     unsafe {
+        let present_info = vk::PresentInfoKHR::default()
+            .swapchains(std::slice::from_ref(&cendre.swapchain.swapchain))
+            .image_indices(std::slice::from_ref(&image_index))
+            .wait_semaphores(&release_semaphores);
         cendre
             .swapchain_loader
             .queue_present(cendre.present_queue, &present_info)
@@ -957,29 +1129,29 @@ fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreRende
         return;
     }
     events.clear();
-    unsafe {
-        let surface_capabilities = cendre
+    let surface_capabilities = unsafe {
+        cendre
             .surface_loader
             .get_physical_device_surface_capabilities(cendre.physical_device, cendre.surface)
-            .unwrap();
+            .unwrap()
+    };
 
-        let new_width = surface_capabilities.current_extent.width;
-        let new_height = surface_capabilities.current_extent.height;
-        if cendre.swapchain.width == new_width && cendre.swapchain.height == new_height {
-            // FIXME: this will break with multiple windows
-            return;
-        }
-
-        cendre.swapchain = cendre.swapchain.resize(
-            &cendre.device,
-            &cendre.swapchain_loader,
-            &cendre.surface_loader,
-            cendre.surface,
-            cendre.surface_format,
-            cendre.physical_device,
-            new_width,
-            new_height,
-            cendre.render_pass,
-        );
+    let new_width = surface_capabilities.current_extent.width;
+    let new_height = surface_capabilities.current_extent.height;
+    if cendre.swapchain.width == new_width && cendre.swapchain.height == new_height {
+        // FIXME: this will break with multiple windows
+        return;
     }
+
+    cendre.swapchain = cendre.swapchain.resize(
+        &cendre.device,
+        &cendre.swapchain_loader,
+        &cendre.surface_loader,
+        cendre.surface,
+        cendre.surface_format,
+        cendre.physical_device,
+        new_width,
+        new_height,
+        cendre.render_pass,
+    );
 }

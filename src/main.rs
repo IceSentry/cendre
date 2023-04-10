@@ -1,5 +1,3 @@
-mod obj_loader;
-
 use std::{ffi::OsStr, io::Write};
 
 use anyhow::Context;
@@ -7,8 +5,8 @@ use bevy::{
     a11y::AccessibilityPlugin, app::AppExit, input::InputPlugin, log::LogPlugin, prelude::*,
     winit::WinitPlugin,
 };
+use cendre::obj_loader::{ObjBundle, ObjLoaderPlugin};
 use naga::{valid::Capabilities, ShaderStage};
-use obj_loader::{ObjBundle, ObjLoaderPlugin};
 
 /// Compiles to spir-v any wgsl or glsl shaders found in ./assets/shaders
 /// For glsl it uses .frag.glsl and .vert.glsl to detect the shader stage
@@ -66,6 +64,7 @@ fn compile_shaders() {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)
+            .truncate(true)
             .open(path.clone())
             .context(format!("Failed to open {path:?}"))
             .unwrap();

@@ -3,9 +3,13 @@ use bevy::{
     asset::{AssetLoader, LoadContext, LoadedAsset},
     prelude::*,
     reflect::TypeUuid,
-    render::{mesh::Indices, render_resource::PrimitiveTopology},
+    render::{
+        mesh::{Indices, VertexAttributeValues},
+        render_resource::PrimitiveTopology,
+    },
     utils::BoxedFuture,
 };
+use bytemuck::cast_slice;
 use std::{
     io::{BufReader, Cursor},
     time::Instant,
@@ -49,7 +53,7 @@ impl AssetLoader for ObjLoader {
             info!(
                 "Finished loading {:?} {}ms",
                 load_context.path(),
-                (Instant::now() - start).as_millis(),
+                start.elapsed().as_millis(),
             );
 
             Ok(())
@@ -84,6 +88,7 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
 
     if !model.mesh.positions.is_empty() {
+        println!("vertex attributes positons found");
         let mut positions = vec![];
         for verts in model.mesh.positions.chunks_exact(3) {
             let [v0, v1, v2] = verts else { unreachable!(); };
@@ -93,6 +98,7 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     }
 
     if !model.mesh.normals.is_empty() {
+        println!("vertex attributes normals found");
         let mut normals = vec![];
         for n in model.mesh.normals.chunks_exact(3) {
             let [n0, n1, n2] = n else { unreachable!(); };
@@ -102,6 +108,7 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     }
 
     if !model.mesh.texcoords.is_empty() {
+        println!("vertex attributes uvs found");
         let mut uvs = vec![];
         for uv in model.mesh.texcoords.chunks_exact(2) {
             let [u, v] = uv else { unreachable!(); };
@@ -111,6 +118,7 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     }
 
     if !model.mesh.vertex_color.is_empty() {
+        println!("vertex attributes colors found");
         let mut vertex_color = vec![];
         for color in model.mesh.vertex_color.chunks_exact(3) {
             let [r, g, b] = color else { unreachable!(); };
@@ -120,6 +128,7 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     }
 
     if !model.mesh.indices.is_empty() {
+        println!("vertex attributes indices found");
         let mut indices = vec![];
         for index in &model.mesh.indices {
             indices.push(*index);
@@ -138,7 +147,33 @@ pub struct ObjBundle {
 #[derive(Component)]
 pub struct OptimizedMesh {
     pub vertex_buffer: Vec<u8>,
-    pub indices_buffer: Vec<u32>,
+    pub index_buffer: Vec<u8>,
+    pub prepared: bool,
+}
+
+#[repr(C)]
+#[derive(Clone, Default)]
+struct Vertex {
+    pos: Vec3,
+    norm: Vec3,
+    uv: Vec2,
+}
+
+impl Vertex {
+    fn bytes(&self) -> Vec<u8> {
+        let mut data = vec![];
+        data.extend_from_slice(cast_slice(&self.pos.to_array()));
+        data.extend_from_slice(cast_slice(&self.norm.to_array()));
+        data.extend_from_slice(cast_slice(&self.uv.to_array()));
+        data
+    }
+}
+
+fn as_float2(val: &VertexAttributeValues) -> Option<&[[f32; 2]]> {
+    match val {
+        VertexAttributeValues::Float32x2(values) => Some(values),
+        _ => None,
+    }
 }
 
 // TODO: this could be done async or directly on load
@@ -155,25 +190,60 @@ fn optimize_mesh(
             // FIXME: this only uses the first mesh
             // complex models can have multiple meshes
             let mesh = &meshes[0];
-            let vertices = mesh.get_vertex_buffer_data();
-            let indices = mesh.indices().map(|indices| match indices {
-                Indices::U32(indices) => indices.as_slice(),
-                _ => panic!("only u32 indices are supported"),
-            });
-            let (vertex_count, remap) = meshopt::generate_vertex_remap(&vertices, indices);
 
-            let vertex_buffer = meshopt::remap_vertex_buffer(&vertices, vertex_count, &remap);
-            let indices_buffer = meshopt::remap_index_buffer(indices, vertex_count, &remap);
+            // Meshopt version
+            // let vertices = {
+            //     let pos = mesh
+            //         .attribute(Mesh::ATTRIBUTE_POSITION)
+            //         .and_then(VertexAttributeValues::as_float3)
+            //         .unwrap();
+            //     let norms = mesh
+            //         .attribute(Mesh::ATTRIBUTE_NORMAL)
+            //         .and_then(VertexAttributeValues::as_float3)
+            //         .unwrap();
+
+            //     let uvs = mesh
+            //         .attribute(Mesh::ATTRIBUTE_UV_0)
+            //         .and_then(as_float2)
+            //         .unwrap();
+
+            //     let mut vertices = vec![];
+            //     for (pos, (norm, uv)) in pos.iter().zip(norms.iter().zip(uvs.iter())) {
+            //         vertices.push(Vertex {
+            //             pos: Vec3::from_slice(pos),
+            //             norm: Vec3::from_slice(norm),
+            //             uv: Vec2::from_slice(uv),
+            //         });
+            //     }
+            //     vertices
+            // };
+
+            // let indices = mesh.indices().map(|indices| match indices {
+            //     Indices::U32(indices) => indices.as_slice(),
+            //     Indices::U16(_) => panic!("only u32 indices are supported"),
+            // });
+            // let (vertex_count, remap) = meshopt::generate_vertex_remap(&vertices, indices);
+
+            // let vertex_buffer = meshopt::remap_vertex_buffer(&vertices, vertex_count, &remap)
+            //     .iter()
+            //     .flat_map(Vertex::bytes)
+            //     .collect();
+            // let index_buffer = meshopt::remap_index_buffer(indices, vertex_count, &remap)
+            //     .iter()
+            //     .flat_map(|x| x.to_ne_bytes())
+            //     .collect();
+
+            // Bevy version
+            let vertex_buffer = mesh.get_vertex_buffer_data();
+            let index_buffer = mesh.get_index_buffer_bytes().unwrap().to_vec();
 
             commands.entity(entity).insert(OptimizedMesh {
                 vertex_buffer,
-                indices_buffer,
+                index_buffer,
+                prepared: false,
             });
 
-            info!(
-                "obj mesh optimized {}ms",
-                (Instant::now() - start).as_millis(),
-            );
+            info!("obj mesh optimized {}ms", start.elapsed().as_millis(),);
         }
     }
 }
