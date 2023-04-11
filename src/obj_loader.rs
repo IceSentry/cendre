@@ -154,17 +154,17 @@ pub struct OptimizedMesh {
 #[repr(C)]
 #[derive(Clone, Default)]
 struct Vertex {
-    pos: Vec3,
-    norm: Vec3,
-    uv: Vec2,
+    pos: [f32; 3],
+    norm: [u8; 4],
+    uv: [f32; 2],
 }
 
 impl Vertex {
     fn bytes(&self) -> Vec<u8> {
         let mut data = vec![];
-        data.extend_from_slice(cast_slice(&self.pos.to_array()));
-        data.extend_from_slice(cast_slice(&self.norm.to_array()));
-        data.extend_from_slice(cast_slice(&self.uv.to_array()));
+        data.extend_from_slice(cast_slice(&self.pos));
+        data.extend_from_slice(&self.norm);
+        data.extend_from_slice(cast_slice(&self.uv));
         data
     }
 }
@@ -192,50 +192,62 @@ fn optimize_mesh(
             let mesh = &meshes[0];
 
             // Meshopt version
-            // let vertices = {
-            //     let pos = mesh
-            //         .attribute(Mesh::ATTRIBUTE_POSITION)
-            //         .and_then(VertexAttributeValues::as_float3)
-            //         .unwrap();
-            //     let norms = mesh
-            //         .attribute(Mesh::ATTRIBUTE_NORMAL)
-            //         .and_then(VertexAttributeValues::as_float3)
-            //         .unwrap();
+            let vertices = {
+                let pos = mesh
+                    .attribute(Mesh::ATTRIBUTE_POSITION)
+                    .and_then(VertexAttributeValues::as_float3)
+                    .unwrap();
+                let norms: Vec<_> = mesh
+                    .attribute(Mesh::ATTRIBUTE_NORMAL)
+                    .and_then(VertexAttributeValues::as_float3)
+                    .map(|n| {
+                        n.iter()
+                            .map(|n| {
+                                [
+                                    (n[0] * 127.0 + 127.0) as u8,
+                                    (n[1] * 127.0 + 127.0) as u8,
+                                    (n[2] * 127.0 + 127.0) as u8,
+                                    0,
+                                ]
+                            })
+                            .collect()
+                    })
+                    .unwrap();
 
-            //     let uvs = mesh
-            //         .attribute(Mesh::ATTRIBUTE_UV_0)
-            //         .and_then(as_float2)
-            //         .unwrap();
+                let uvs = mesh
+                    .attribute(Mesh::ATTRIBUTE_UV_0)
+                    .and_then(as_float2)
+                    .unwrap();
 
-            //     let mut vertices = vec![];
-            //     for (pos, (norm, uv)) in pos.iter().zip(norms.iter().zip(uvs.iter())) {
-            //         vertices.push(Vertex {
-            //             pos: Vec3::from_slice(pos),
-            //             norm: Vec3::from_slice(norm),
-            //             uv: Vec2::from_slice(uv),
-            //         });
-            //     }
-            //     vertices
-            // };
+                let mut vertices = vec![];
+                for (pos, (norm, uv)) in pos.iter().zip(norms.iter().zip(uvs.iter())) {
+                    vertices.push(Vertex {
+                        pos: *pos,
+                        norm: *norm,
+                        uv: *uv,
+                    });
+                }
+                vertices
+            };
 
-            // let indices = mesh.indices().map(|indices| match indices {
-            //     Indices::U32(indices) => indices.as_slice(),
-            //     Indices::U16(_) => panic!("only u32 indices are supported"),
-            // });
-            // let (vertex_count, remap) = meshopt::generate_vertex_remap(&vertices, indices);
+            let indices = mesh.indices().map(|indices| match indices {
+                Indices::U32(indices) => indices.as_slice(),
+                Indices::U16(_) => panic!("only u32 indices are supported"),
+            });
+            let (vertex_count, remap) = meshopt::generate_vertex_remap(&vertices, indices);
 
-            // let vertex_buffer = meshopt::remap_vertex_buffer(&vertices, vertex_count, &remap)
-            //     .iter()
-            //     .flat_map(Vertex::bytes)
-            //     .collect();
-            // let index_buffer = meshopt::remap_index_buffer(indices, vertex_count, &remap)
-            //     .iter()
-            //     .flat_map(|x| x.to_ne_bytes())
-            //     .collect();
+            let vertex_buffer = meshopt::remap_vertex_buffer(&vertices, vertex_count, &remap)
+                .iter()
+                .flat_map(Vertex::bytes)
+                .collect();
+            let index_buffer = meshopt::remap_index_buffer(indices, vertex_count, &remap)
+                .iter()
+                .flat_map(|x| x.to_ne_bytes())
+                .collect();
 
             // Bevy version
-            let vertex_buffer = mesh.get_vertex_buffer_data();
-            let index_buffer = mesh.get_index_buffer_bytes().unwrap().to_vec();
+            // let vertex_buffer = mesh.get_vertex_buffer_data();
+            // let index_buffer = mesh.get_index_buffer_bytes().unwrap().to_vec();
 
             commands.entity(entity).insert(OptimizedMesh {
                 vertex_buffer,

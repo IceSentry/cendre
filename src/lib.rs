@@ -22,7 +22,7 @@ use anyhow::bail;
 use ash::{
     extensions::{
         ext::DebugUtils,
-        khr::{Surface, Swapchain},
+        khr::{PushDescriptor, Surface, Swapchain},
     },
     Device,
 };
@@ -422,9 +422,34 @@ fn load_shader(device: &Device, path: &str) -> anyhow::Result<vk::ShaderModule> 
     Ok(unsafe { device.create_shader_module(&create_info, None)? })
 }
 
-fn create_pipeline_layout(device: &Device) -> anyhow::Result<vk::PipelineLayout> {
-    let create_info = vk::PipelineLayoutCreateInfo::default();
-    Ok(unsafe { device.create_pipeline_layout(&create_info, None)? })
+fn create_pipeline_layout(
+    device: &Device,
+) -> anyhow::Result<(vk::PipelineLayout, [vk::DescriptorSetLayout; 1])> {
+    let bindings = [vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .descriptor_count(1)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .stage_flags(vk::ShaderStageFlags::VERTEX)];
+
+    let create_info = vk::DescriptorSetLayoutCreateInfo::default()
+        .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR)
+        .bindings(&bindings);
+
+    let layouts = [unsafe {
+        device
+            .create_descriptor_set_layout(&create_info, None)
+            .unwrap()
+    }];
+    let create_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts);
+
+    // unsafe {
+    //     device.destroy_descriptor_set_layout(layouts[0], None);
+    // }
+
+    Ok((
+        unsafe { device.create_pipeline_layout(&create_info, None)? },
+        layouts,
+    ))
 }
 
 fn create_graphics_pipeline(
@@ -435,6 +460,7 @@ fn create_graphics_pipeline(
     vertex_shader: vk::ShaderModule,
     fragment_shader: vk::ShaderModule,
 ) -> anyhow::Result<vk::Pipeline> {
+    // TODO use naga directly here
     let vertex_name = CString::new("vertex".to_string()).unwrap();
     let fragment_name = CString::new("fragment".to_string()).unwrap();
 
@@ -449,29 +475,7 @@ fn create_graphics_pipeline(
             .name(&fragment_name),
     ];
 
-    let stream = vk::VertexInputBindingDescription {
-        binding: 0,
-        stride: 32,
-        input_rate: vk::VertexInputRate::VERTEX,
-    };
-    let attrs = vec![
-        vk::VertexInputAttributeDescription::default()
-            .location(0)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(0),
-        vk::VertexInputAttributeDescription::default()
-            .location(1)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(12),
-        vk::VertexInputAttributeDescription::default()
-            .location(2)
-            .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(24),
-    ];
-
-    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
-        .vertex_attribute_descriptions(&attrs)
-        .vertex_binding_descriptions(std::slice::from_ref(&stream));
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
 
     let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::default()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
@@ -620,6 +624,7 @@ fn image_barrier<'a>(
 struct Buffer {
     raw: vk::Buffer,
     allocation: Option<Allocation>,
+    size: u64,
 }
 
 impl Buffer {
@@ -649,6 +654,7 @@ impl Buffer {
         Ok(Self {
             raw: buffer,
             allocation: Some(allocation),
+            size,
         })
     }
 
@@ -672,6 +678,7 @@ impl Buffer {
 struct CendreRenderer {
     instance: Instance,
     device: Device,
+    push_descriptor: PushDescriptor,
     physical_device: vk::PhysicalDevice,
     debug_utils: DebugUtils,
     debug_utils_messenger: vk::DebugUtilsMessengerEXT,
@@ -694,6 +701,7 @@ struct CendreRenderer {
     allocator: Option<Allocator>,
     vertex_buffer: Buffer,
     index_buffer: Buffer,
+    desciptor_set_layouts: [vk::DescriptorSetLayout; 1],
 }
 
 impl CendreRenderer {
@@ -726,11 +734,13 @@ impl CendreRenderer {
             .queue_family_index(queue_family_index as u32)
             .queue_priorities(&[1.0]);
 
-        let extension_names = [Swapchain::NAME.as_ptr()];
+        let extension_names = [Swapchain::NAME.as_ptr(), PushDescriptor::NAME.as_ptr()];
+
         let features = vk::PhysicalDeviceFeatures::default();
 
         let mut physical_device_buffer_device_address_features =
             vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
+
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_info))
             .enabled_extension_names(&extension_names)
@@ -742,6 +752,8 @@ impl CendreRenderer {
                 .create_device(physical_device, &device_create_info, None)
                 .unwrap()
         };
+
+        let push_descriptor = PushDescriptor::new(&instance, &device);
 
         let surface_format = get_surface_format(&surface_loader, physical_device, surface)
             .expect("Failed to get a surface format");
@@ -782,7 +794,7 @@ impl CendreRenderer {
         let create_info = vk::PipelineCacheCreateInfo::default();
         let pipeline_cache = unsafe { device.create_pipeline_cache(&create_info, None).unwrap() };
 
-        let pipeline_layout = create_pipeline_layout(&device).unwrap();
+        let (pipeline_layout, desciptor_set_layouts) = create_pipeline_layout(&device).unwrap();
         let pipeline = create_graphics_pipeline(
             &device,
             pipeline_cache,
@@ -808,7 +820,7 @@ impl CendreRenderer {
             &device,
             &mut allocator,
             128 * 1024 * 1024,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
         )
         .unwrap();
         let index_buffer = Buffer::new(
@@ -822,6 +834,7 @@ impl CendreRenderer {
         Self {
             instance,
             device,
+            push_descriptor,
             physical_device,
             debug_utils,
             debug_utils_messenger,
@@ -844,6 +857,7 @@ impl CendreRenderer {
             allocator: Some(allocator),
             vertex_buffer,
             index_buffer,
+            desciptor_set_layouts,
         }
     }
 }
@@ -854,6 +868,10 @@ impl Drop for CendreRenderer {
             self.device.device_wait_idle().unwrap();
 
             self.device.destroy_command_pool(self.command_pool, None);
+
+            for layout in self.desciptor_set_layouts {
+                self.device.destroy_descriptor_set_layout(layout, None);
+            }
 
             self.vertex_buffer
                 .destroy(&self.device, self.allocator.as_mut().unwrap());
@@ -1038,14 +1056,24 @@ fn update(
         );
     }
 
+    let buffer_info = [vk::DescriptorBufferInfo::default()
+        .buffer(cendre.vertex_buffer.raw)
+        .offset(0)
+        .range(cendre.vertex_buffer.size)];
+    let descriptor_writes = [vk::WriteDescriptorSet::default()
+        .dst_binding(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .buffer_info(&buffer_info)];
     unsafe {
-        device.cmd_bind_vertex_buffers(
+        cendre.push_descriptor.cmd_push_descriptor_set(
             command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            cendre.pipeline_layout,
             0,
-            std::slice::from_ref(&cendre.vertex_buffer.raw),
-            &[0],
+            &descriptor_writes,
         );
-    }
+    };
+
     unsafe {
         device.cmd_bind_index_buffer(
             command_buffer,

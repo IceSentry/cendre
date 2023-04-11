@@ -27,7 +27,13 @@ fn compile_shaders() {
         let source = std::fs::read_to_string(entry.clone()).unwrap();
 
         let module = match extension {
-            "wgsl" => naga::front::wgsl::parse_str(&source).unwrap(),
+            "wgsl" => match naga::front::wgsl::parse_str(&source) {
+                Ok(module) => module,
+                Err(err) => {
+                    println!("\x1b[91mERROR\x1b[0m {}: {}", entry.to_string_lossy(), err);
+                    panic!("Invalid wgsl shader {}", entry.to_string_lossy())
+                }
+            },
             "glsl" => {
                 let mut parser = naga::front::glsl::Parser::default();
                 let file_name = entry.file_name().unwrap().to_string_lossy();
@@ -38,17 +44,32 @@ fn compile_shaders() {
                 } else {
                     todo!()
                 };
-                parser.parse(&options, &source).unwrap()
+
+                match parser.parse(&options, &source) {
+                    Ok(module) => module,
+                    Err(errors) => {
+                        for err in errors {
+                            println!("\x1b[91mERROR\x1b[0m {}: {}", entry.to_string_lossy(), err);
+                        }
+                        panic!("Invalid glsl shader {}", entry.to_string_lossy())
+                    }
+                }
             }
             _ => panic!("Unknown shader format"),
         };
 
-        let module_info = naga::valid::Validator::new(
+        let module_info = match naga::valid::Validator::new(
             naga::valid::ValidationFlags::default(),
             Capabilities::all(),
         )
         .validate(&module)
-        .unwrap();
+        {
+            Ok(module_info) => module_info,
+            Err(err) => {
+                println!("{err}");
+                panic!("Shader validation error for {}", entry.to_string_lossy());
+            }
+        };
         let spv = naga::back::spv::write_vec(
             &module,
             &module_info,
