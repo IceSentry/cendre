@@ -366,6 +366,10 @@ fn select_physical_device(
     for physical_device in &physical_devices {
         let props = unsafe { instance.get_physical_device_properties(*physical_device) };
 
+        if props.api_version < vk::API_VERSION_1_1 {
+            continue;
+        }
+
         let Some(queue_family_index) =
             get_queue_family_index(instance, surface_loader, surface, *physical_device)
         else {
