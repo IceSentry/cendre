@@ -24,6 +24,7 @@ use ash::{
     extensions::{
         ext::DebugUtils,
         khr::{PushDescriptor, Surface, Swapchain},
+        nv::MeshShader,
     },
     Device,
 };
@@ -33,8 +34,10 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, Allocator, AllocatorCreateDesc},
     MemoryLocation,
 };
-use optimized_mesh::OptimizedMesh;
+use optimized_mesh::{Meshlet, OptimizedMesh};
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
+
+const RTX: bool = true;
 
 pub struct CendrePlugin;
 impl Plugin for CendrePlugin {
@@ -558,7 +561,7 @@ unsafe extern "system" fn vulkan_debug_callback(
         vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => warn!("{message_format}"),
         vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => {
             error!("{message_format}");
-            panic!("VALIDATION ERROR");
+            panic!("VULKAN VALIDATION ERROR");
         }
         _ => panic!("Unknown message severity"),
     }
@@ -685,6 +688,7 @@ struct CendreRenderer {
     device: Device,
     push_descriptor: PushDescriptor,
     physical_device: vk::PhysicalDevice,
+    mesh_shader: MeshShader,
     debug_utils: DebugUtils,
     debug_utils_messenger: vk::DebugUtilsMessengerEXT,
     swapchain_loader: Swapchain,
@@ -706,6 +710,7 @@ struct CendreRenderer {
     allocator: Option<Allocator>,
     vertex_buffer: Buffer,
     index_buffer: Buffer,
+    mesh_buffer: Buffer,
     desciptor_set_layouts: [vk::DescriptorSetLayout; 1],
 }
 
@@ -739,7 +744,11 @@ impl CendreRenderer {
             .queue_family_index(queue_family_index as u32)
             .queue_priorities(&[1.0]);
 
-        let extension_names = [Swapchain::NAME.as_ptr(), PushDescriptor::NAME.as_ptr()];
+        let extension_names = [
+            Swapchain::NAME.as_ptr(),
+            PushDescriptor::NAME.as_ptr(),
+            MeshShader::NAME.as_ptr(),
+        ];
 
         let features = vk::PhysicalDeviceFeatures::default();
 
@@ -757,6 +766,7 @@ impl CendreRenderer {
                 .create_device(physical_device, &device_create_info, None)
                 .unwrap()
         };
+        let mesh_shader = MeshShader::new(&instance, &device);
 
         let push_descriptor = PushDescriptor::new(&instance, &device);
 
@@ -835,11 +845,19 @@ impl CendreRenderer {
             vk::BufferUsageFlags::INDEX_BUFFER,
         )
         .unwrap();
+        let mesh_buffer = Buffer::new(
+            &device,
+            &mut allocator,
+            128 * 1024 * 1024,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+        )
+        .unwrap();
 
         Self {
             instance,
             device,
             push_descriptor,
+            mesh_shader,
             physical_device,
             debug_utils,
             debug_utils_messenger,
@@ -862,6 +880,7 @@ impl CendreRenderer {
             allocator: Some(allocator),
             vertex_buffer,
             index_buffer,
+            mesh_buffer,
             desciptor_set_layouts,
         }
     }
@@ -930,6 +949,13 @@ fn init_vulkan(
 #[derive(Resource)]
 struct IndexCount(pub u32);
 
+#[derive(Resource)]
+struct MeshletsSize(pub u32);
+
+fn build_meshlets(mesh: &OptimizedMesh) -> Vec<Meshlet> {
+    todo!()
+}
+
 fn prepare_mesh(
     mut commands: Commands,
     mut cendre: ResMut<CendreRenderer>,
@@ -942,6 +968,17 @@ fn prepare_mesh(
 
             cendre.vertex_buffer.write(&mesh.vertex_buffer);
             cendre.index_buffer.write(&mesh.index_buffer);
+
+            if RTX {
+                let meshlets = build_meshlets(&mesh);
+                let data = meshlets
+                    .iter()
+                    .flat_map(optimized_mesh::Meshlet::data)
+                    .collect::<Vec<_>>();
+                cendre.mesh_buffer.write(&data);
+                commands.insert_resource(MeshletsSize(meshlets.len() as u32));
+            }
+
             commands.insert_resource(IndexCount(
                 (mesh.index_buffer.len() / std::mem::size_of::<u32>()) as u32,
             ));
@@ -957,6 +994,7 @@ fn update(
     cendre: Res<CendreRenderer>,
     windows: Query<&Window>,
     index_count: Option<Res<IndexCount>>,
+    meshlets_size: Option<Res<MeshletsSize>>,
 ) {
     let window = windows.single();
     let acquire_semaphores = [cendre.acquire_semaphore];
@@ -1061,37 +1099,77 @@ fn update(
         );
     }
 
-    let buffer_info = [vk::DescriptorBufferInfo::default()
+    let vertex_buffer_info = [vk::DescriptorBufferInfo::default()
         .buffer(cendre.vertex_buffer.raw)
         .offset(0)
         .range(cendre.vertex_buffer.size)];
-    let descriptor_writes = [vk::WriteDescriptorSet::default()
-        .dst_binding(0)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .buffer_info(&buffer_info)];
-    unsafe {
-        cendre.push_descriptor.cmd_push_descriptor_set(
-            command_buffer,
-            vk::PipelineBindPoint::GRAPHICS,
-            cendre.pipeline_layout,
-            0,
-            &descriptor_writes,
-        );
-    };
 
-    unsafe {
-        device.cmd_bind_index_buffer(
-            command_buffer,
-            cendre.index_buffer.raw,
-            0,
-            vk::IndexType::UINT32,
-        );
-    }
+    if RTX {
+        let mesh_buffer_info = [vk::DescriptorBufferInfo::default()
+            .buffer(cendre.mesh_buffer.raw)
+            .offset(0)
+            .range(cendre.mesh_buffer.size)];
+        let descriptor_writes = [
+            vk::WriteDescriptorSet::default()
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&vertex_buffer_info),
+            vk::WriteDescriptorSet::default()
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&mesh_buffer_info),
+        ];
+        unsafe {
+            cendre.push_descriptor.cmd_push_descriptor_set(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                cendre.pipeline_layout,
+                0,
+                &descriptor_writes,
+            );
+        };
 
-    unsafe {
-        // device.cmd_draw(command_buffer, 3, 1, 0, 0);
-        if let Some(index_count) = index_count {
-            device.cmd_draw_indexed(command_buffer, index_count.0, 1, 0, 0, 0);
+        if let Some(size) = meshlets_size {
+            unsafe {
+                cendre
+                    .mesh_shader
+                    .cmd_draw_mesh_tasks(command_buffer, size.0, 0);
+            }
+        }
+
+        unsafe {
+            if let Some(index_count) = index_count {
+                device.cmd_draw_indexed(command_buffer, index_count.0, 1, 0, 0, 0);
+            }
+        }
+    } else {
+        let descriptor_writes = [vk::WriteDescriptorSet::default()
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&vertex_buffer_info)];
+        unsafe {
+            cendre.push_descriptor.cmd_push_descriptor_set(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                cendre.pipeline_layout,
+                0,
+                &descriptor_writes,
+            );
+        };
+
+        unsafe {
+            device.cmd_bind_index_buffer(
+                command_buffer,
+                cendre.index_buffer.raw,
+                0,
+                vk::IndexType::UINT32,
+            );
+        }
+
+        unsafe {
+            if let Some(index_count) = index_count {
+                device.cmd_draw_indexed(command_buffer, index_count.0, 1, 0, 0, 0);
+            }
         }
     }
 

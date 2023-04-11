@@ -24,6 +24,8 @@ fn compile_shaders() {
             continue;
         }
 
+        println!("Compiling shader: {}", entry.to_string_lossy());
+
         let source = std::fs::read_to_string(entry.clone()).unwrap();
 
         let module = match extension {
@@ -35,12 +37,14 @@ fn compile_shaders() {
                 }
             },
             "glsl" => {
-                let mut parser = naga::front::glsl::Parser::default();
+                let mut parser = naga::front::glsl::Frontend::default();
                 let file_name = entry.file_name().unwrap().to_string_lossy();
                 let options = if file_name.contains(".vert") {
                     naga::front::glsl::Options::from(ShaderStage::Vertex)
                 } else if file_name.contains(".frag") {
                     naga::front::glsl::Options::from(ShaderStage::Fragment)
+                } else if file_name.contains(".mesh") {
+                    naga::front::glsl::Options::from(ShaderStage::Mesh)
                 } else {
                     todo!()
                 };

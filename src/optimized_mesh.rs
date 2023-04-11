@@ -22,13 +22,27 @@ impl Vertex {
     }
 }
 
-struct Meshlet {
-    vertices: [u32; 64],
-    indices: [u8; 126], // up to 42 triangles
-    triangle_count: u8,
-    vertex_count: u8,
+pub struct Meshlet {
+    pub vertices: [u32; 64],
+    pub indices: [u8; 126], // up to 42 triangles
+    pub triangle_count: u8,
+    pub vertex_count: u8,
 }
 
+impl Meshlet {
+    pub fn from_optimized_mesh(mesh: &OptimizedMesh) -> Self {
+        todo!()
+    }
+
+    pub fn data(&self) -> Vec<u8> {
+        let mut data = vec![];
+        data.extend_from_slice(cast_slice(&self.vertices));
+        data.extend_from_slice(cast_slice(&self.indices));
+        data.push(self.triangle_count);
+        data.push(self.vertex_count);
+        data
+    }
+}
 #[derive(Component)]
 pub struct OptimizedMesh {
     pub vertex_buffer: Vec<u8>,
