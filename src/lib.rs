@@ -10,6 +10,7 @@
 #![allow(clippy::missing_panics_doc)]
 
 pub mod obj_loader;
+pub mod optimized_mesh;
 
 use std::{
     borrow::Cow,
@@ -32,7 +33,7 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, Allocator, AllocatorCreateDesc},
     MemoryLocation,
 };
-use obj_loader::OptimizedMesh;
+use optimized_mesh::OptimizedMesh;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 pub struct CendrePlugin;
