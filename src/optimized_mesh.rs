@@ -151,11 +151,11 @@ fn build_meshlets(mesh: &OptimizedMesh) -> Vec<Meshlet> {
             || meshlet.index_count + 3 > 126
         {
             meshlets.push(meshlet);
-            meshlet = Meshlet::default();
-            // WARN this is super slow
-            for i in &mut meshlet_vertices {
-                *i = 0xFF;
+            for i in 0..meshlet.vertex_count {
+                let v = meshlet.vertices[i as usize];
+                meshlet_vertices[v as usize] = 0xFF;
             }
+            meshlet = Meshlet::default();
         }
 
         if meshlet_vertices[*a as usize] == 0xFF {
