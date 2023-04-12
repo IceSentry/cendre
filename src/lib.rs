@@ -36,7 +36,7 @@ use gpu_allocator::{
 use optimized_mesh::prepare_mesh;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
-const RTX: bool = true;
+const RTX: bool = false;
 
 pub struct CendrePlugin;
 impl Plugin for CendrePlugin {
@@ -758,24 +758,33 @@ impl CendreRenderer {
             Swapchain::NAME.as_ptr(),
             PushDescriptor::NAME.as_ptr(),
             MeshShader::NAME.as_ptr(),
+            unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_KHR_16bit_storage\0").as_ptr() },
+            unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_KHR_8bit_storage\0").as_ptr() },
         ];
 
-        let features = vk::PhysicalDeviceFeatures::default();
+        let mut features2 = vk::PhysicalDeviceFeatures2::default();
 
         let mut physical_device_buffer_device_address_features =
             vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
 
-        let mut features_mesh = vk::PhysicalDeviceMeshShaderFeaturesNV::default();
-        if RTX {
-            features_mesh.mesh_shader(true);
-        }
+        let mut features_16bit_storage =
+            vk::PhysicalDevice16BitStorageFeatures::default().storage_buffer16_bit_access(true);
+
+        let mut features_8bit_storage = vk::PhysicalDevice8BitStorageFeatures::default()
+            .storage_buffer8_bit_access(true)
+            .uniform_and_storage_buffer8_bit_access(true);
+
+        let mut mesh_shader_features_nv =
+            vk::PhysicalDeviceMeshShaderFeaturesNV::default().mesh_shader(RTX);
 
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_info))
             .enabled_extension_names(&extension_names)
-            .enabled_features(&features)
-            .push_next(&mut features_mesh)
-            .push_next(&mut physical_device_buffer_device_address_features);
+            .push_next(&mut features2)
+            .push_next(&mut physical_device_buffer_device_address_features)
+            .push_next(&mut features_16bit_storage)
+            .push_next(&mut features_8bit_storage)
+            .push_next(&mut mesh_shader_features_nv);
 
         let device = unsafe {
             instance
