@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use crate::instance::CendreInstance;
 use crate::optimized_mesh::{
     prepare_mesh, IndexBuffer, MeshletBuffer, MeshletsSize, OptimizedMesh, VertexBuffer,
@@ -17,6 +19,9 @@ impl Plugin for CendrePlugin {
     }
 }
 
+#[derive(Resource)]
+struct CendrePipeline(Arc<Mutex<vk::Pipeline>>);
+
 fn init_cendre(
     mut commands: Commands,
     windows: Query<Entity, With<Window>>,
@@ -29,6 +34,7 @@ fn init_cendre(
         .expect("Failed to get winit window");
 
     let mut cendre = CendreInstance::init(winit_window);
+    info!("Instance created");
 
     let bindings = if RTX {
         vec![
@@ -60,7 +66,7 @@ fn init_cendre(
     );
 
     // TODO keep pipeline around and use it in update()
-    let _pipeline = if RTX {
+    let pipeline = if RTX {
         let meshlet_ms = cendre.load_shader(
             "assets/shaders/meshlet.mesh.glsl",
             "main",
@@ -69,8 +75,7 @@ fn init_cendre(
         let stages = vec![meshlet_ms.create_info(), triangle_fs.create_info()];
         cendre
             .create_graphics_pipeline(
-                // TODO take the actual struct as param
-                *pipeline_layout.pipeline_layout.lock().unwrap(),
+                &pipeline_layout,
                 cendre.render_pass,
                 &stages,
                 vk::PrimitiveTopology::TRIANGLE_LIST,
@@ -85,21 +90,23 @@ fn init_cendre(
         let stages = vec![triangle_vs.create_info(), triangle_fs.create_info()];
         cendre
             .create_graphics_pipeline(
-                *pipeline_layout.pipeline_layout.lock().unwrap(),
+                &pipeline_layout,
                 cendre.render_pass,
                 &stages,
                 vk::PrimitiveTopology::TRIANGLE_LIST,
             )
             .expect("Failed to create graphics pipeline")
     };
-    info!("pipeline created");
+    info!("Pipeline created");
 
+    commands.insert_resource(CendrePipeline(pipeline));
     commands.insert_resource(cendre);
 }
 
 #[allow(clippy::too_many_lines)]
 fn update(
     cendre: Res<CendreInstance>,
+    cendre_pipeline: Res<CendrePipeline>,
     windows: Query<&Window>,
     meshlets_size: Option<Res<MeshletsSize>>,
     meshes: Query<(
@@ -150,8 +157,7 @@ fn update(
         device.cmd_bind_pipeline(
             command_buffer,
             vk::PipelineBindPoint::GRAPHICS,
-            // TODO don't assume there's only one pipeline
-            *cendre.pipelines[0].lock().unwrap(),
+            *cendre_pipeline.0.lock().unwrap(),
         );
     }
 

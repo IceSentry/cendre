@@ -343,7 +343,7 @@ impl CendreInstance {
 
     pub fn create_graphics_pipeline(
         &mut self,
-        layout: vk::PipelineLayout,
+        layout: &PipelineLayout,
         render_pass: vk::RenderPass,
         stages: &[vk::PipelineShaderStageCreateInfo],
         primitive_topology: vk::PrimitiveTopology,
@@ -385,7 +385,7 @@ impl CendreInstance {
             .depth_stencil_state(&depth_stencil_state)
             .color_blend_state(&color_blend_state)
             .dynamic_state(&dynamic_state)
-            .layout(layout)
+            .layout(*layout.pipeline_layout.lock().unwrap())
             .render_pass(render_pass);
         let graphics_pipelines = match unsafe {
             self.device.create_graphics_pipelines(
@@ -559,8 +559,10 @@ impl Drop for CendreInstance {
 
             self.swapchain.destroy(&self.device, &self.swapchain_loader);
 
-            //TODO
-            // self.device.destroy_pipeline(self.pipeline, None);
+            for pipeline in &self.pipelines {
+                self.device
+                    .destroy_pipeline(*pipeline.lock().unwrap(), None);
+            }
 
             for pipeline_layout in &self.pipeline_layouts {
                 self.device
