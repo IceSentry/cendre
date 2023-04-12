@@ -86,7 +86,7 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
 
     if !model.mesh.positions.is_empty() {
-        println!("vertex attributes positons found");
+        info!("vertex attributes positons found");
         let mut positions = vec![];
         for verts in model.mesh.positions.chunks_exact(3) {
             let [v0, v1, v2] = verts else { unreachable!(); };
@@ -96,7 +96,7 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     }
 
     if !model.mesh.normals.is_empty() {
-        println!("vertex attributes normals found");
+        info!("vertex attributes normals found");
         let mut normals = vec![];
         for n in model.mesh.normals.chunks_exact(3) {
             let [n0, n1, n2] = n else { unreachable!(); };
@@ -106,7 +106,7 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     }
 
     if !model.mesh.texcoords.is_empty() {
-        println!("vertex attributes uvs found");
+        info!("vertex attributes uvs found");
         let mut uvs = vec![];
         for uv in model.mesh.texcoords.chunks_exact(2) {
             let [u, v] = uv else { unreachable!(); };
@@ -116,7 +116,7 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     }
 
     if !model.mesh.vertex_color.is_empty() {
-        println!("vertex attributes colors found");
+        info!("vertex attributes colors found");
         let mut vertex_color = vec![];
         for color in model.mesh.vertex_color.chunks_exact(3) {
             let [r, g, b] = color else { unreachable!(); };
@@ -126,7 +126,7 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     }
 
     if !model.mesh.indices.is_empty() {
-        println!("vertex attributes indices found");
+        info!("vertex attributes indices found");
         let mut indices = vec![];
         for index in &model.mesh.indices {
             indices.push(*index);

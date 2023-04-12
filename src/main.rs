@@ -2,14 +2,9 @@ use bevy::{
     a11y::AccessibilityPlugin, app::AppExit, input::InputPlugin, log::LogPlugin, prelude::*,
     winit::WinitPlugin,
 };
-use cendre::{
-    obj_loader::{ObjBundle, ObjLoaderPlugin},
-    shaders::compile_shaders,
-};
+use cendre::obj_loader::{ObjBundle, ObjLoaderPlugin};
 
 fn main() -> anyhow::Result<()> {
-    compile_shaders();
-
     App::new()
         .add_plugins(MinimalPlugins)
         .add_plugin(WindowPlugin {

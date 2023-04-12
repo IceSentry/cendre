@@ -73,9 +73,7 @@ pub struct CendreInstance {
     pub pipeline_cache: vk::PipelineCache,
     pub pipeline: vk::Pipeline,
     pub pipeline_layout: vk::PipelineLayout,
-    pub triangle_vs: vk::ShaderModule,
-    pub triangle_fs: vk::ShaderModule,
-    pub meshlet_ms: vk::ShaderModule,
+    pub shader_modules: Vec<vk::ShaderModule>,
     pub allocator: Allocator,
     pub allocations: Vec<Arc<Mutex<Option<Allocation>>>>,
     pub buffers: Vec<Arc<Mutex<vk::Buffer>>>,
@@ -194,11 +192,11 @@ impl CendreInstance {
 
         // TODO don't load the shaders in the instance init
 
-        let meshlet_ms = load_shader(&device, "assets/shaders/meshlet.mesh.spv")
+        let meshlet_ms = load_shader(&device, "assets/shaders/meshlet.mesh.glsl")
             .expect("Failed to load meshlet mesh shader");
-        let triangle_vs = load_shader(&device, "assets/shaders/triangle.vert.spv")
+        let triangle_vs = load_shader(&device, "assets/shaders/triangle.vert.wgsl")
             .expect("Failed to load triangle vertex shader");
-        let triangle_fs = load_shader(&device, "assets/shaders/triangle.frag.spv")
+        let triangle_fs = load_shader(&device, "assets/shaders/triangle.frag.wgsl")
             .expect("Failed to load triangle fragment shader");
 
         let create_info = vk::PipelineCacheCreateInfo::default();
@@ -261,9 +259,7 @@ impl CendreInstance {
             pipeline_cache,
             pipeline,
             pipeline_layout,
-            triangle_vs,
-            triangle_fs,
-            meshlet_ms,
+            shader_modules: vec![triangle_vs, triangle_fs, meshlet_ms],
             allocator,
             allocations: vec![],
             buffers: vec![],
@@ -471,9 +467,9 @@ impl Drop for CendreInstance {
             self.device
                 .destroy_pipeline_cache(self.pipeline_cache, None);
 
-            self.device.destroy_shader_module(self.meshlet_ms, None);
-            self.device.destroy_shader_module(self.triangle_vs, None);
-            self.device.destroy_shader_module(self.triangle_fs, None);
+            for module in &self.shader_modules {
+                self.device.destroy_shader_module(*module, None);
+            }
 
             self.device.destroy_render_pass(self.render_pass, None);
 
