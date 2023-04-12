@@ -5,7 +5,7 @@ use ash::{vk, Device};
 use bevy::prelude::*;
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 
-pub fn load_shader(device: &Device, path: &str) -> anyhow::Result<vk::ShaderModule> {
+pub fn load_vk_shader_module(device: &Device, path: &str) -> anyhow::Result<vk::ShaderModule> {
     info!("Loading {path:?}");
 
     let path_buf = PathBuf::from(path);

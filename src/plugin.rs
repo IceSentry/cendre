@@ -1,3 +1,5 @@
+use std::ffi::CString;
+
 use crate::instance::CendreInstance;
 use crate::optimized_mesh::{
     prepare_mesh, IndexBuffer, MeshletBuffer, MeshletsSize, OptimizedMesh, VertexBuffer,
@@ -28,7 +30,83 @@ fn init_cendre(
         .and_then(|window_id| winit_windows.get_window(window_id))
         .expect("Failed to get winit window");
 
-    commands.insert_resource(CendreInstance::init(winit_window));
+    let mut cendre = CendreInstance::init(winit_window);
+
+    let bindings = if RTX {
+        vec![
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_count(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .stage_flags(vk::ShaderStageFlags::MESH_NV),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_count(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .stage_flags(vk::ShaderStageFlags::MESH_NV),
+        ]
+    } else {
+        vec![vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::VERTEX)]
+    };
+
+    let pipeline_layout = cendre.create_pipeline_layout(&bindings).unwrap();
+
+    let vertex_name = CString::new("vertex".to_string()).unwrap();
+    let mesh_name = CString::new("main".to_string()).unwrap();
+    let fragment_name = CString::new("fragment".to_string()).unwrap();
+
+    let triangle_fs = cendre.load_shader("assets/shaders/triangle.frag.wgsl");
+
+    // TODO keep pipeline around and use it in update()
+    let _pipeline = if RTX {
+        let meshlet_ms = cendre.load_shader("assets/shaders/meshlet.mesh.glsl");
+        let stages = vec![
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::MESH_NV)
+                .module(*meshlet_ms.vk_shader_module.lock().unwrap())
+                .name(&mesh_name),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(*triangle_fs.vk_shader_module.lock().unwrap())
+                .name(&fragment_name),
+        ];
+        cendre
+            .create_graphics_pipeline(
+                // TODO take the actual struct as param
+                *pipeline_layout.pipeline_layout.lock().unwrap(),
+                cendre.render_pass,
+                &stages,
+                vk::PrimitiveTopology::TRIANGLE_LIST,
+            )
+            .expect("Failed to create graphics pipeline")
+    } else {
+        let triangle_vs = cendre.load_shader("assets/shaders/triangle.vert.wgsl");
+        let stages = vec![
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(*triangle_vs.vk_shader_module.lock().unwrap())
+                .name(&vertex_name),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(*triangle_fs.vk_shader_module.lock().unwrap())
+                .name(&fragment_name),
+        ];
+        cendre
+            .create_graphics_pipeline(
+                *pipeline_layout.pipeline_layout.lock().unwrap(),
+                cendre.render_pass,
+                &stages,
+                vk::PrimitiveTopology::TRIANGLE_LIST,
+            )
+            .expect("Failed to create graphics pipeline")
+    };
+    info!("pipeline created");
+
+    commands.insert_resource(cendre);
 }
 
 #[allow(clippy::too_many_lines)]
@@ -84,7 +162,8 @@ fn update(
         device.cmd_bind_pipeline(
             command_buffer,
             vk::PipelineBindPoint::GRAPHICS,
-            cendre.pipeline,
+            // TODO don't assume there's only one pipeline
+            *cendre.pipelines[0].lock().unwrap(),
         );
     }
 
@@ -108,7 +187,7 @@ fn update(
                     cendre.push_descriptor.cmd_push_descriptor_set(
                         command_buffer,
                         vk::PipelineBindPoint::GRAPHICS,
-                        cendre.pipeline_layout,
+                        *cendre.pipeline_layouts[0].lock().unwrap(),
                         0,
                         &descriptor_writes,
                     );
@@ -134,11 +213,12 @@ fn update(
                 .dst_binding(0)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .buffer_info(&vertex_buffer_info)];
+
             unsafe {
                 cendre.push_descriptor.cmd_push_descriptor_set(
                     command_buffer,
                     vk::PipelineBindPoint::GRAPHICS,
-                    cendre.pipeline_layout,
+                    *cendre.pipeline_layouts[0].lock().unwrap(),
                     0,
                     &descriptor_writes,
                 );

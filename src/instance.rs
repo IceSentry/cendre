@@ -23,7 +23,8 @@ use gpu_allocator::{
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 use crate::{
-    c_char_buf_to_string, image_barrier, shaders::load_shader, swapchain::CendreSwapchain, RTX,
+    c_char_buf_to_string, image_barrier, shaders::load_vk_shader_module,
+    swapchain::CendreSwapchain, RTX,
 };
 
 pub struct Buffer {
@@ -50,6 +51,15 @@ impl Buffer {
     }
 }
 
+pub struct PipelineLayout {
+    pub pipeline_layout: Arc<Mutex<vk::PipelineLayout>>,
+    pub descriptor_set_layout: Arc<Mutex<vk::DescriptorSetLayout>>,
+}
+
+pub struct Shader {
+    pub vk_shader_module: Arc<Mutex<vk::ShaderModule>>,
+}
+
 #[derive(Resource)]
 pub struct CendreInstance {
     pub instance: Instance,
@@ -71,13 +81,13 @@ pub struct CendreInstance {
     pub command_buffers: Vec<vk::CommandBuffer>,
     pub render_pass: vk::RenderPass,
     pub pipeline_cache: vk::PipelineCache,
-    pub pipeline: vk::Pipeline,
-    pub pipeline_layout: vk::PipelineLayout,
-    pub shader_modules: Vec<vk::ShaderModule>,
+    pub pipeline_layouts: Vec<Arc<Mutex<vk::PipelineLayout>>>,
+    pub pipelines: Vec<Arc<Mutex<vk::Pipeline>>>,
+    pub descriptor_set_layouts: Vec<Arc<Mutex<vk::DescriptorSetLayout>>>,
+    pub shader_modules: Vec<Arc<Mutex<vk::ShaderModule>>>,
     pub allocator: Allocator,
     pub allocations: Vec<Arc<Mutex<Option<Allocation>>>>,
     pub buffers: Vec<Arc<Mutex<vk::Buffer>>>,
-    pub desciptor_set_layouts: [vk::DescriptorSetLayout; 1],
 }
 
 impl CendreInstance {
@@ -190,44 +200,8 @@ impl CendreInstance {
         let release_semaphore = create_semaphore(&device).expect("Failed to create semaphore");
         let present_queue = unsafe { device.get_device_queue(queue_family_index as u32, 0) };
 
-        let mut shader_modules = vec![];
-        let triangle_fs = load_shader(&device, "assets/shaders/triangle.frag.wgsl")
-            .expect("Failed to load triangle fragment shader");
-        shader_modules.push(triangle_fs);
-
         let create_info = vk::PipelineCacheCreateInfo::default();
         let pipeline_cache = unsafe { device.create_pipeline_cache(&create_info, None).unwrap() };
-
-        let (pipeline_layout, desciptor_set_layouts) = create_pipeline_layout(&device).unwrap();
-        let pipeline = if RTX {
-            let meshlet_ms = load_shader(&device, "assets/shaders/meshlet.mesh.glsl")
-                .expect("Failed to load meshlet mesh shader");
-            shader_modules.push(meshlet_ms);
-            create_graphics_pipeline(
-                &device,
-                pipeline_cache,
-                pipeline_layout,
-                render_pass,
-                meshlet_ms,
-                triangle_fs,
-            )
-            .expect("Failed to create graphics pipeline")
-        } else {
-            let triangle_vs = load_shader(&device, "assets/shaders/triangle.vert.wgsl")
-                .expect("Failed to load triangle vertex shader");
-            shader_modules.push(triangle_vs);
-
-            create_graphics_pipeline(
-                &device,
-                pipeline_cache,
-                pipeline_layout,
-                render_pass,
-                triangle_vs,
-                triangle_fs,
-            )
-            .expect("Failed to create graphics pipeline")
-        };
-        info!("pipeline created");
 
         let buffer_device_address =
             physical_device_buffer_device_address_features.buffer_device_address == 1;
@@ -260,13 +234,13 @@ impl CendreInstance {
             command_buffers,
             render_pass,
             pipeline_cache,
-            pipeline,
-            pipeline_layout,
-            shader_modules,
+            pipeline_layouts: vec![],
+            pipelines: vec![],
+            descriptor_set_layouts: vec![],
+            shader_modules: vec![],
             allocator,
             allocations: vec![],
             buffers: vec![],
-            desciptor_set_layouts,
         }
     }
 
@@ -305,6 +279,109 @@ impl CendreInstance {
             allocation_raw,
             size,
         })
+    }
+
+    pub fn create_pipeline_layout(
+        &mut self,
+        bindings: &[vk::DescriptorSetLayoutBinding],
+    ) -> anyhow::Result<PipelineLayout> {
+        let create_info = vk::DescriptorSetLayoutCreateInfo::default()
+            .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR)
+            .bindings(bindings);
+        let descriptor_set_layout = unsafe {
+            self.device
+                .create_descriptor_set_layout(&create_info, None)
+                .unwrap()
+        };
+
+        let create_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(std::slice::from_ref(&descriptor_set_layout));
+        let pipeline_layout = unsafe { self.device.create_pipeline_layout(&create_info, None)? };
+
+        let pipeline_layout = Arc::new(Mutex::new(pipeline_layout));
+        self.pipeline_layouts.push(pipeline_layout.clone());
+
+        let descriptor_set_layout = Arc::new(Mutex::new(descriptor_set_layout));
+        self.descriptor_set_layouts
+            .push(descriptor_set_layout.clone());
+
+        Ok(PipelineLayout {
+            pipeline_layout,
+            descriptor_set_layout,
+        })
+    }
+
+    // TODO add entry_point and shader stage
+    pub fn load_shader(&mut self, path: &str) -> Shader {
+        let vk_shader_module = load_vk_shader_module(&self.device, path).unwrap();
+        let vk_shader_module = Arc::new(Mutex::new(vk_shader_module));
+        self.shader_modules.push(vk_shader_module.clone());
+        Shader { vk_shader_module }
+    }
+
+    pub fn create_graphics_pipeline(
+        &mut self,
+        layout: vk::PipelineLayout,
+        render_pass: vk::RenderPass,
+        stages: &[vk::PipelineShaderStageCreateInfo],
+        primitive_topology: vk::PrimitiveTopology,
+    ) -> anyhow::Result<Arc<Mutex<vk::Pipeline>>> {
+        let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
+
+        let input_assembly_state =
+            vk::PipelineInputAssemblyStateCreateInfo::default().topology(primitive_topology);
+
+        let viewport_state = vk::PipelineViewportStateCreateInfo::default()
+            .viewport_count(1)
+            .scissor_count(1);
+
+        let rasterization_state = vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .line_width(1.0);
+
+        let multisample_state = vk::PipelineMultisampleStateCreateInfo::default()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+
+        let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default();
+
+        let color_attachment_state = vk::PipelineColorBlendAttachmentState::default()
+            .color_write_mask(vk::ColorComponentFlags::RGBA);
+        let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
+            .attachments(std::slice::from_ref(&color_attachment_state));
+
+        let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+        let dynamic_state =
+            vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
+
+        let create_info = vk::GraphicsPipelineCreateInfo::default()
+            .stages(stages)
+            .vertex_input_state(&vertex_input_state)
+            .input_assembly_state(&input_assembly_state)
+            .viewport_state(&viewport_state)
+            .rasterization_state(&rasterization_state)
+            .multisample_state(&multisample_state)
+            .depth_stencil_state(&depth_stencil_state)
+            .color_blend_state(&color_blend_state)
+            .dynamic_state(&dynamic_state)
+            .layout(layout)
+            .render_pass(render_pass);
+        let graphics_pipelines = match unsafe {
+            self.device.create_graphics_pipelines(
+                self.pipeline_cache,
+                std::slice::from_ref(&create_info),
+                None,
+            )
+        } {
+            Ok(pipelines) => pipelines,
+            // For some reason the Err is a tuple and doesn't work with anyhow
+            Err((_, result)) => {
+                error!("{result:?}");
+                bail!("Failed to create graphics pipelines")
+            }
+        };
+        let pipeline = Arc::new(Mutex::new(graphics_pipelines[0]));
+        self.pipelines.push(pipeline.clone());
+        Ok(pipeline)
     }
 
     #[must_use]
@@ -449,10 +526,6 @@ impl Drop for CendreInstance {
 
             self.device.destroy_command_pool(self.command_pool, None);
 
-            for layout in self.desciptor_set_layouts {
-                self.device.destroy_descriptor_set_layout(layout, None);
-            }
-
             for buffer in &self.buffers {
                 let buffer = buffer.lock().unwrap();
                 self.device.destroy_buffer(*buffer, None);
@@ -464,14 +537,24 @@ impl Drop for CendreInstance {
 
             self.swapchain.destroy(&self.device, &self.swapchain_loader);
 
-            self.device.destroy_pipeline(self.pipeline, None);
-            self.device
-                .destroy_pipeline_layout(self.pipeline_layout, None);
+            //TODO
+            // self.device.destroy_pipeline(self.pipeline, None);
+
+            for pipeline_layout in &self.pipeline_layouts {
+                self.device
+                    .destroy_pipeline_layout(*pipeline_layout.lock().unwrap(), None);
+            }
+            for descriptor_set_layout in &self.descriptor_set_layouts {
+                self.device
+                    .destroy_descriptor_set_layout(*descriptor_set_layout.lock().unwrap(), None);
+            }
+
             self.device
                 .destroy_pipeline_cache(self.pipeline_cache, None);
 
             for module in &self.shader_modules {
-                self.device.destroy_shader_module(*module, None);
+                self.device
+                    .destroy_shader_module(*module.lock().unwrap(), None);
             }
 
             self.device.destroy_render_pass(self.render_pass, None);
@@ -718,138 +801,4 @@ fn create_command_pool(device: &Device, queue_family_index: u32) -> vk::CommandP
 fn create_semaphore(device: &Device) -> anyhow::Result<vk::Semaphore> {
     let semaphore_create_info = vk::SemaphoreCreateInfo::default();
     Ok(unsafe { device.create_semaphore(&semaphore_create_info, None)? })
-}
-
-fn create_pipeline_layout(
-    device: &Device,
-) -> anyhow::Result<(vk::PipelineLayout, [vk::DescriptorSetLayout; 1])> {
-    let bindings = if RTX {
-        vec![
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(0)
-                .descriptor_count(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .stage_flags(vk::ShaderStageFlags::MESH_NV),
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(1)
-                .descriptor_count(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .stage_flags(vk::ShaderStageFlags::MESH_NV),
-        ]
-    } else {
-        vec![vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .stage_flags(vk::ShaderStageFlags::VERTEX)]
-    };
-
-    let create_info = vk::DescriptorSetLayoutCreateInfo::default()
-        .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR)
-        .bindings(&bindings);
-
-    let layouts = [unsafe {
-        device
-            .create_descriptor_set_layout(&create_info, None)
-            .unwrap()
-    }];
-    let create_info = vk::PipelineLayoutCreateInfo::default().set_layouts(&layouts);
-
-    // unsafe {
-    //     device.destroy_descriptor_set_layout(layouts[0], None);
-    // }
-
-    Ok((
-        unsafe { device.create_pipeline_layout(&create_info, None)? },
-        layouts,
-    ))
-}
-
-fn create_graphics_pipeline(
-    device: &Device,
-    pipeline_cache: vk::PipelineCache,
-    layout: vk::PipelineLayout,
-    render_pass: vk::RenderPass,
-    vertex_shader: vk::ShaderModule,
-    fragment_shader: vk::ShaderModule,
-) -> anyhow::Result<vk::Pipeline> {
-    // TODO use naga directly here
-    let vertex_name = CString::new("vertex".to_string()).unwrap();
-    let mesh_name = CString::new("main".to_string()).unwrap();
-    let fragment_name = CString::new("fragment".to_string()).unwrap();
-
-    let stages = if RTX {
-        [
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::MESH_NV)
-                .module(vertex_shader)
-                .name(&mesh_name),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(fragment_shader)
-                .name(&fragment_name),
-        ]
-    } else {
-        [
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(vertex_shader)
-                .name(&vertex_name),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(fragment_shader)
-                .name(&fragment_name),
-        ]
-    };
-
-    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
-
-    let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::default()
-        .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
-
-    let viewport_state = vk::PipelineViewportStateCreateInfo::default()
-        .viewport_count(1)
-        .scissor_count(1);
-
-    let rasterization_state = vk::PipelineRasterizationStateCreateInfo::default()
-        .polygon_mode(vk::PolygonMode::FILL)
-        .line_width(1.0);
-
-    let multisample_state = vk::PipelineMultisampleStateCreateInfo::default()
-        .rasterization_samples(vk::SampleCountFlags::TYPE_1);
-
-    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::default();
-
-    let color_attachment_state = vk::PipelineColorBlendAttachmentState::default()
-        .color_write_mask(vk::ColorComponentFlags::RGBA);
-    let color_blend_state = vk::PipelineColorBlendStateCreateInfo::default()
-        .attachments(std::slice::from_ref(&color_attachment_state));
-
-    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-    let dynamic_state =
-        vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
-
-    let create_info = vk::GraphicsPipelineCreateInfo::default()
-        .stages(&stages)
-        .vertex_input_state(&vertex_input_state)
-        .input_assembly_state(&input_assembly_state)
-        .viewport_state(&viewport_state)
-        .rasterization_state(&rasterization_state)
-        .multisample_state(&multisample_state)
-        .depth_stencil_state(&depth_stencil_state)
-        .color_blend_state(&color_blend_state)
-        .dynamic_state(&dynamic_state)
-        .layout(layout)
-        .render_pass(render_pass);
-    let graphics_pipelines = match unsafe {
-        device.create_graphics_pipelines(pipeline_cache, std::slice::from_ref(&create_info), None)
-    } {
-        Ok(pipelines) => pipelines,
-        // For some reason the Err is a tuple and doesn't work with anyhow
-        Err((_, result)) => {
-            error!("{result:?}");
-            bail!("Failed to create graphics pipelines")
-        }
-    };
-    Ok(graphics_pipelines[0])
 }
