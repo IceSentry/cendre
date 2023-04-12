@@ -160,7 +160,7 @@ fn main() -> anyhow::Result<()> {
             watch_for_changes: true,
             ..default()
         })
-        .add_plugin(cendre::CendrePlugin)
+        .add_plugin(cendre::plugin::CendrePlugin)
         .add_plugin(ObjLoaderPlugin)
         .add_startup_system(load_mesh)
         .add_system(exit_on_esc)

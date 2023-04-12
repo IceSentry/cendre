@@ -7,7 +7,10 @@ use bevy::{
 };
 use bytemuck::cast_slice;
 
-use crate::{Buffer, CendreInstance, MeshletsSize, RTX};
+use crate::{
+    instance::{Buffer, CendreInstance},
+    RTX,
+};
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
@@ -201,6 +204,9 @@ pub struct VertexBuffer(pub Buffer);
 pub struct IndexBuffer(pub Buffer);
 #[derive(Component, Deref)]
 pub struct MeshletBuffer(pub Buffer);
+
+#[derive(Resource)]
+pub struct MeshletsSize(pub u32);
 
 pub(crate) fn prepare_mesh(
     mut commands: Commands,
