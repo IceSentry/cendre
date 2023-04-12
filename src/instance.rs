@@ -28,36 +28,77 @@ use crate::{
 };
 
 pub struct Buffer {
-    pub buffer_raw: Arc<Mutex<vk::Buffer>>,
-    pub allocation_raw: Arc<Mutex<Option<Allocation>>>,
+    vk_buffer: Arc<Mutex<vk::Buffer>>,
+    allocation: Arc<Mutex<Option<Allocation>>>,
     pub size: u64,
 }
 
 impl Buffer {
     pub fn write(&mut self, data: &[u8]) {
-        // let mut allocation = self.allocation_raw.lock().unwrap();
-        if let Some(allocation) = self.allocation_raw.lock().unwrap().as_mut() {
+        if let Some(allocation) = self.allocation.lock().unwrap().as_mut() {
             let slice = allocation.mapped_slice_mut().unwrap();
             slice[..data.len()].copy_from_slice(data);
         }
     }
 
     #[must_use]
-    pub fn info(&self, offset: vk::DeviceSize) -> vk::DescriptorBufferInfo {
+    pub fn descriptor_info(&self, offset: vk::DeviceSize) -> vk::DescriptorBufferInfo {
         vk::DescriptorBufferInfo::default()
-            .buffer(*self.buffer_raw.lock().unwrap())
+            .buffer(self.vk_buffer())
             .offset(offset)
             .range(self.size)
+    }
+
+    #[must_use]
+    pub fn write_descriptor<'a>(
+        &'a self,
+        dst_binding: u32,
+        descriptor_type: vk::DescriptorType,
+        buffer_info: &'a vk::DescriptorBufferInfo,
+    ) -> vk::WriteDescriptorSet {
+        vk::WriteDescriptorSet::default()
+            .dst_binding(dst_binding)
+            .descriptor_type(descriptor_type)
+            .buffer_info(std::slice::from_ref(buffer_info))
+    }
+
+    #[must_use]
+    pub fn vk_buffer(&self) -> vk::Buffer {
+        *self.vk_buffer.lock().unwrap()
     }
 }
 
 pub struct PipelineLayout {
-    pub pipeline_layout: Arc<Mutex<vk::PipelineLayout>>,
-    pub descriptor_set_layout: Arc<Mutex<vk::DescriptorSetLayout>>,
+    vk_pipeline_layout: Arc<Mutex<vk::PipelineLayout>>,
+    vk_descriptor_set_layout: Arc<Mutex<vk::DescriptorSetLayout>>,
+}
+
+impl PipelineLayout {
+    #[must_use]
+    pub fn vk_pipeline_layout(&self) -> vk::PipelineLayout {
+        *self.vk_pipeline_layout.lock().unwrap()
+    }
+
+    #[must_use]
+    pub fn vk_descriptor_set_layout(&self) -> vk::DescriptorSetLayout {
+        *self.vk_descriptor_set_layout.lock().unwrap()
+    }
+}
+
+pub struct Pipeline {
+    pub layout: PipelineLayout,
+    vk_pipeline: Arc<Mutex<vk::Pipeline>>,
+}
+
+impl Pipeline {
+    #[must_use]
+    pub fn vk_pipeline(&self) -> vk::Pipeline {
+        *self.vk_pipeline.lock().unwrap()
+    }
 }
 
 pub struct Shader {
-    pub vk_shader_module: Arc<Mutex<vk::ShaderModule>>,
+    vk_shader_module: Arc<Mutex<vk::ShaderModule>>,
     pub entry_point: CString,
     pub stage: vk::ShaderStageFlags,
 }
@@ -93,13 +134,13 @@ pub struct CendreInstance {
     pub command_buffers: Vec<vk::CommandBuffer>,
     pub render_pass: vk::RenderPass,
     pub pipeline_cache: vk::PipelineCache,
-    pub pipeline_layouts: Vec<Arc<Mutex<vk::PipelineLayout>>>,
-    pub pipelines: Vec<Arc<Mutex<vk::Pipeline>>>,
-    pub descriptor_set_layouts: Vec<Arc<Mutex<vk::DescriptorSetLayout>>>,
-    pub shader_modules: Vec<Arc<Mutex<vk::ShaderModule>>>,
-    pub allocator: Allocator,
-    pub allocations: Vec<Arc<Mutex<Option<Allocation>>>>,
-    pub buffers: Vec<Arc<Mutex<vk::Buffer>>>,
+    pipeline_layouts: Vec<Arc<Mutex<vk::PipelineLayout>>>,
+    pipelines: Vec<Arc<Mutex<vk::Pipeline>>>,
+    descriptor_set_layouts: Vec<Arc<Mutex<vk::DescriptorSetLayout>>>,
+    shader_modules: Vec<Arc<Mutex<vk::ShaderModule>>>,
+    allocator: Allocator,
+    allocations: Vec<Arc<Mutex<Option<Allocation>>>>,
+    buffers: Vec<Arc<Mutex<vk::Buffer>>>,
 }
 
 impl CendreInstance {
@@ -287,10 +328,27 @@ impl CendreInstance {
         self.allocations.push(allocation_raw.clone());
 
         Ok(Buffer {
-            buffer_raw,
-            allocation_raw,
+            vk_buffer: buffer_raw,
+            allocation: allocation_raw,
             size,
         })
+    }
+
+    pub fn load_shader(
+        &mut self,
+        path: &str,
+        entry_point: &str,
+        stage: vk::ShaderStageFlags,
+    ) -> Shader {
+        let vk_shader_module = load_vk_shader_module(&self.device, path).unwrap();
+        let vk_shader_module = Arc::new(Mutex::new(vk_shader_module));
+        self.shader_modules.push(vk_shader_module.clone());
+        let entry_point = CString::new(entry_point).unwrap();
+        Shader {
+            vk_shader_module,
+            entry_point,
+            stage,
+        }
     }
 
     pub fn create_pipeline_layout(
@@ -318,36 +376,18 @@ impl CendreInstance {
             .push(descriptor_set_layout.clone());
 
         Ok(PipelineLayout {
-            pipeline_layout,
-            descriptor_set_layout,
+            vk_pipeline_layout: pipeline_layout,
+            vk_descriptor_set_layout: descriptor_set_layout,
         })
-    }
-
-    // TODO add entry_point and shader stage
-    pub fn load_shader(
-        &mut self,
-        path: &str,
-        entry_point: &str,
-        stage: vk::ShaderStageFlags,
-    ) -> Shader {
-        let vk_shader_module = load_vk_shader_module(&self.device, path).unwrap();
-        let vk_shader_module = Arc::new(Mutex::new(vk_shader_module));
-        self.shader_modules.push(vk_shader_module.clone());
-        let entry_point = CString::new(entry_point).unwrap();
-        Shader {
-            vk_shader_module,
-            entry_point,
-            stage,
-        }
     }
 
     pub fn create_graphics_pipeline(
         &mut self,
-        layout: &PipelineLayout,
+        pipeline_layout: PipelineLayout,
         render_pass: vk::RenderPass,
         stages: &[vk::PipelineShaderStageCreateInfo],
         primitive_topology: vk::PrimitiveTopology,
-    ) -> anyhow::Result<Arc<Mutex<vk::Pipeline>>> {
+    ) -> anyhow::Result<Pipeline> {
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
 
         let input_assembly_state =
@@ -385,7 +425,7 @@ impl CendreInstance {
             .depth_stencil_state(&depth_stencil_state)
             .color_blend_state(&color_blend_state)
             .dynamic_state(&dynamic_state)
-            .layout(*layout.pipeline_layout.lock().unwrap())
+            .layout(*pipeline_layout.vk_pipeline_layout.lock().unwrap())
             .render_pass(render_pass);
         let graphics_pipelines = match unsafe {
             self.device.create_graphics_pipelines(
@@ -403,7 +443,10 @@ impl CendreInstance {
         };
         let pipeline = Arc::new(Mutex::new(graphics_pipelines[0]));
         self.pipelines.push(pipeline.clone());
-        Ok(pipeline)
+        Ok(Pipeline {
+            vk_pipeline: pipeline,
+            layout: pipeline_layout,
+        })
     }
 
     #[must_use]

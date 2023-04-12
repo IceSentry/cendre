@@ -12,7 +12,6 @@
 pub mod instance;
 pub mod obj_loader;
 pub mod optimized_mesh;
-pub mod plugin;
 pub mod shaders;
 pub mod swapchain;
 
@@ -21,7 +20,7 @@ use std::{borrow::Cow, ffi::CStr, os::raw::c_char};
 use ash::vk;
 use bevy::prelude::*;
 
-const RTX: bool = false;
+pub const RTX: bool = false;
 
 fn image_barrier<'a>(
     image: vk::Image,

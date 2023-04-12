@@ -208,7 +208,7 @@ pub struct MeshletBuffer(pub Buffer);
 #[derive(Resource)]
 pub struct MeshletsSize(pub u32);
 
-pub(crate) fn prepare_mesh(
+pub fn prepare_mesh(
     mut commands: Commands,
     mut cendre: ResMut<CendreInstance>,
     mut meshes: Query<(Entity, &mut OptimizedMesh)>,
