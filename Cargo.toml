@@ -25,6 +25,7 @@ bytemuck = "1.13.1"
 gpu-allocator = { path = "../gpu-allocator" }
 meshopt = "0.1.9"
 raw-window-handle = "0.5.2"
+shaderc = "0.8.2"
 tobj = { version = "3.2.5", features = ["async"] }
 winit = "0.28.3"
 

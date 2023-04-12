@@ -1,15 +1,19 @@
+use std::time::Instant;
+
 use bevy::{
     prelude::*,
     render::mesh::{Indices, VertexAttributeValues},
 };
 use bytemuck::cast_slice;
 
+use crate::{CendreRenderer, IndexCount, MeshletsSize, RTX};
+
 #[repr(C)]
-#[derive(Clone, Default)]
-struct Vertex {
-    pos: [f32; 3],
-    norm: [u8; 4],
-    uv: [f32; 2],
+#[derive(Copy, Clone, Default)]
+pub struct Vertex {
+    pub pos: [f32; 3],
+    pub norm: [u8; 4],
+    pub uv: [f32; 2],
 }
 
 impl Vertex {
@@ -22,6 +26,7 @@ impl Vertex {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Meshlet {
     pub vertices: [u32; 64],
     pub indices: [u8; 126], // up to 42 triangles
@@ -29,12 +34,20 @@ pub struct Meshlet {
     pub vertex_count: u8,
 }
 
-impl Meshlet {
-    pub fn from_optimized_mesh(mesh: &OptimizedMesh) -> Self {
-        todo!()
+impl Default for Meshlet {
+    fn default() -> Self {
+        Self {
+            vertices: [0; 64],
+            indices: [0; 126],
+            triangle_count: 0,
+            vertex_count: 0,
+        }
     }
+}
 
-    pub fn data(&self) -> Vec<u8> {
+impl Meshlet {
+    #[must_use]
+    pub fn bytes(&self) -> Vec<u8> {
         let mut data = vec![];
         data.extend_from_slice(cast_slice(&self.vertices));
         data.extend_from_slice(cast_slice(&self.indices));
@@ -43,10 +56,11 @@ impl Meshlet {
         data
     }
 }
+
 #[derive(Component)]
 pub struct OptimizedMesh {
-    pub vertex_buffer: Vec<u8>,
-    pub index_buffer: Vec<u8>,
+    pub vertices: Vec<Vertex>,
+    pub indices: Option<Vec<u32>>,
     pub prepared: bool,
 }
 
@@ -92,27 +106,28 @@ impl OptimizedMesh {
         };
 
         let indices = mesh.indices().map(|indices| match indices {
-            Indices::U32(indices) => indices.as_slice(),
+            Indices::U32(indices) => indices.clone(),
             Indices::U16(_) => panic!("only u32 indices are supported"),
         });
-        let (vertex_count, remap) = meshopt::generate_vertex_remap(&vertices, indices);
 
-        let vertex_buffer = meshopt::remap_vertex_buffer(&vertices, vertex_count, &remap)
-            .iter()
-            .flat_map(Vertex::bytes)
-            .collect();
-        let index_buffer = meshopt::remap_index_buffer(indices, vertex_count, &remap)
-            .iter()
-            .flat_map(|x| x.to_ne_bytes())
-            .collect();
+        // let (vertex_count, remap) = meshopt::generate_vertex_remap(&vertices, indices);
+
+        // let vertex_buffer = meshopt::remap_vertex_buffer(&vertices, vertex_count, &remap)
+        //     .iter()
+        //     .flat_map(Vertex::bytes)
+        //     .collect();
+        // let index_buffer = meshopt::remap_index_buffer(indices, vertex_count, &remap)
+        //     .iter()
+        //     .flat_map(|x| x.to_ne_bytes())
+        //     .collect();
 
         // Bevy version
         // let vertex_buffer = mesh.get_vertex_buffer_data();
         // let index_buffer = mesh.get_index_buffer_bytes().unwrap().to_vec();
 
         Self {
-            vertex_buffer,
-            index_buffer,
+            vertices,
+            indices,
             prepared: false,
         }
     }
@@ -122,5 +137,108 @@ fn as_float2(val: &VertexAttributeValues) -> Option<&[[f32; 2]]> {
     match val {
         VertexAttributeValues::Float32x2(values) => Some(values),
         _ => None,
+    }
+}
+
+#[allow(clippy::identity_op)]
+fn build_meshlets(mesh: &OptimizedMesh) -> Vec<Meshlet> {
+    let mut meshlets = vec![];
+    let mut meshlet = Meshlet::default();
+    let meshlet_vertices = vec![0xFF; mesh.vertices.len()];
+
+    let Some(indices) = mesh.indices.as_ref() else {
+        panic!("Meshlets require indices");
+    };
+
+    for chunk in indices.chunks(3) {
+        let [a, b, c] = chunk else { unreachable!() };
+        let mut av = meshlet_vertices[*a as usize];
+        let mut bv = meshlet_vertices[*b as usize];
+        let mut cv = meshlet_vertices[*c as usize];
+
+        if meshlet.vertex_count + u8::from(av == 0xFF) + u8::from(bv == 0xFF) + u8::from(cv == 0xFF)
+            > 64
+        {
+            meshlets.push(meshlet);
+            meshlet = Meshlet::default();
+        }
+        if meshlet.triangle_count + 1 > 126 / 3 {
+            meshlets.push(meshlet);
+            meshlet = Meshlet::default();
+        }
+
+        if av == 0xFF {
+            av = meshlet.vertex_count;
+            meshlet.vertex_count += 1;
+            meshlet.vertices[meshlet.vertex_count as usize] = *a;
+        }
+        if bv == 0xFF {
+            bv = meshlet.vertex_count;
+            meshlet.vertex_count += 1;
+            meshlet.vertices[meshlet.vertex_count as usize] = *b;
+        }
+        if cv == 0xFF {
+            cv = meshlet.vertex_count;
+            meshlet.vertex_count += 1;
+            meshlet.vertices[meshlet.vertex_count as usize] = *c;
+        }
+
+        meshlet.indices[(meshlet.triangle_count * 3 + 0) as usize] = av;
+        meshlet.indices[(meshlet.triangle_count * 3 + 1) as usize] = bv;
+        meshlet.indices[(meshlet.triangle_count * 3 + 2) as usize] = cv;
+        meshlet.triangle_count += 1;
+    }
+    if meshlet.triangle_count > 0 {
+        meshlets.push(meshlet);
+    }
+    meshlets
+}
+
+pub(crate) fn prepare_mesh(
+    mut commands: Commands,
+    mut cendre: ResMut<CendreRenderer>,
+    mut meshes: Query<&mut OptimizedMesh>,
+) {
+    for mut mesh in &mut meshes {
+        if !mesh.prepared {
+            info!("preparing mesh");
+            let start = Instant::now();
+
+            let (vertex_count, remap) = if let Some(indices) = mesh.indices.clone() {
+                meshopt::generate_vertex_remap(&mesh.vertices, Some(&indices))
+            } else {
+                meshopt::generate_vertex_remap(&mesh.vertices, None)
+            };
+
+            let vertex_buffer = meshopt::remap_vertex_buffer(&mesh.vertices, vertex_count, &remap)
+                .iter()
+                .flat_map(Vertex::bytes)
+                .collect::<Vec<_>>();
+            let index_buffer = if let Some(indices) = mesh.indices.clone() {
+                meshopt::remap_index_buffer(Some(&indices), vertex_count, &remap)
+            } else {
+                meshopt::remap_index_buffer(None, vertex_count, &remap)
+            }
+            .iter()
+            .flat_map(|x| x.to_ne_bytes())
+            .collect::<Vec<_>>();
+
+            cendre.vertex_buffer.write(&vertex_buffer);
+            cendre.index_buffer.write(&index_buffer);
+
+            if RTX {
+                let meshlets = build_meshlets(&mesh);
+                let data = meshlets.iter().flat_map(Meshlet::bytes).collect::<Vec<_>>();
+                cendre.mesh_buffer.write(&data);
+                commands.insert_resource(MeshletsSize(meshlets.len() as u32));
+            }
+
+            commands.insert_resource(IndexCount(
+                (index_buffer.len() / std::mem::size_of::<u32>()) as u32,
+            ));
+
+            info!("mesh prepared in {}ms", start.elapsed().as_millis());
+            mesh.prepared = true;
+        }
     }
 }

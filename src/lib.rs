@@ -16,7 +16,6 @@ use std::{
     borrow::Cow,
     ffi::{CStr, CString},
     os::raw::c_char,
-    time::Instant,
 };
 
 use anyhow::bail;
@@ -34,10 +33,10 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, Allocator, AllocatorCreateDesc},
     MemoryLocation,
 };
-use optimized_mesh::{Meshlet, OptimizedMesh};
+use optimized_mesh::prepare_mesh;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
-const RTX: bool = true;
+const RTX: bool = false;
 
 pub struct CendrePlugin;
 impl Plugin for CendrePlugin {
@@ -423,6 +422,7 @@ fn get_queue_family_index(
 }
 
 fn load_shader(device: &Device, path: &str) -> anyhow::Result<vk::ShaderModule> {
+    info!("loading {path}");
     let mut shader_file = std::fs::File::open(path)?;
     let spv = ash::util::read_spv(&mut shader_file)?;
 
@@ -433,11 +433,26 @@ fn load_shader(device: &Device, path: &str) -> anyhow::Result<vk::ShaderModule> 
 fn create_pipeline_layout(
     device: &Device,
 ) -> anyhow::Result<(vk::PipelineLayout, [vk::DescriptorSetLayout; 1])> {
-    let bindings = [vk::DescriptorSetLayoutBinding::default()
-        .binding(0)
-        .descriptor_count(1)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .stage_flags(vk::ShaderStageFlags::VERTEX)];
+    let bindings = if RTX {
+        vec![
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_count(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .stage_flags(vk::ShaderStageFlags::MESH_NV),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_count(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .stage_flags(vk::ShaderStageFlags::MESH_NV),
+        ]
+    } else {
+        vec![vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::VERTEX)]
+    };
 
     let create_info = vk::DescriptorSetLayoutCreateInfo::default()
         .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR)
@@ -470,18 +485,32 @@ fn create_graphics_pipeline(
 ) -> anyhow::Result<vk::Pipeline> {
     // TODO use naga directly here
     let vertex_name = CString::new("vertex".to_string()).unwrap();
+    let mesh_name = CString::new("main".to_string()).unwrap();
     let fragment_name = CString::new("fragment".to_string()).unwrap();
 
-    let stages = [
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::VERTEX)
-            .module(vertex_shader)
-            .name(&vertex_name),
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(vk::ShaderStageFlags::FRAGMENT)
-            .module(fragment_shader)
-            .name(&fragment_name),
-    ];
+    let stages = if RTX {
+        [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::MESH_NV)
+                .module(vertex_shader)
+                .name(&mesh_name),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(fragment_shader)
+                .name(&fragment_name),
+        ]
+    } else {
+        [
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::VERTEX)
+                .module(vertex_shader)
+                .name(&vertex_name),
+            vk::PipelineShaderStageCreateInfo::default()
+                .stage(vk::ShaderStageFlags::FRAGMENT)
+                .module(fragment_shader)
+                .name(&fragment_name),
+        ]
+    };
 
     let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
 
@@ -527,7 +556,10 @@ fn create_graphics_pipeline(
     } {
         Ok(pipelines) => pipelines,
         // For some reason the Err is a tuple and doesn't work with anyhow
-        Err((_, result)) => bail!("Failed to create graphics pipelines.\n{result:?}"),
+        Err((_, result)) => {
+            error!("{result:?}");
+            bail!("Failed to create graphics pipelines")
+        }
     };
     Ok(graphics_pipelines[0])
 }
@@ -755,10 +787,16 @@ impl CendreRenderer {
         let mut physical_device_buffer_device_address_features =
             vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
 
+        let mut features_mesh = vk::PhysicalDeviceMeshShaderFeaturesNV::default();
+        if RTX {
+            features_mesh.mesh_shader(true);
+        }
+
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_info))
             .enabled_extension_names(&extension_names)
             .enabled_features(&features)
+            .push_next(&mut features_mesh)
             .push_next(&mut physical_device_buffer_device_address_features);
 
         let device = unsafe {
@@ -766,14 +804,20 @@ impl CendreRenderer {
                 .create_device(physical_device, &device_create_info, None)
                 .unwrap()
         };
-        let mesh_shader = MeshShader::new(&instance, &device);
+
+        info!("device created");
 
         let push_descriptor = PushDescriptor::new(&instance, &device);
+        let mesh_shader = MeshShader::new(&instance, &device);
 
         let surface_format = get_surface_format(&surface_loader, physical_device, surface)
             .expect("Failed to get a surface format");
 
+        info!("surface format: {surface_format:?}");
+
         let render_pass = create_render_pass(&device, surface_format).unwrap();
+
+        info!("render pass created");
 
         let swapchain_loader = Swapchain::new(&instance, &device);
         let swapchain = CendreSwapchain::new(
@@ -789,6 +833,8 @@ impl CendreRenderer {
             None,
         );
 
+        info!("swapchain created");
+
         let command_pool = create_command_pool(&device, queue_family_index as u32);
 
         let allocate_info = vk::CommandBufferAllocateInfo::default()
@@ -801,6 +847,8 @@ impl CendreRenderer {
         let release_semaphore = create_semaphore(&device).expect("Failed to create semaphore");
         let present_queue = unsafe { device.get_device_queue(queue_family_index as u32, 0) };
 
+        let meshlet_ms = load_shader(&device, "assets/shaders/meshlet.mesh.spv")
+            .expect("Failed to load meshlet mesh shader");
         let triangle_vs = load_shader(&device, "assets/shaders/triangle.vert.spv")
             .expect("Failed to load triangle vertex shader");
         let triangle_fs = load_shader(&device, "assets/shaders/triangle.frag.spv")
@@ -810,15 +858,28 @@ impl CendreRenderer {
         let pipeline_cache = unsafe { device.create_pipeline_cache(&create_info, None).unwrap() };
 
         let (pipeline_layout, desciptor_set_layouts) = create_pipeline_layout(&device).unwrap();
-        let pipeline = create_graphics_pipeline(
-            &device,
-            pipeline_cache,
-            pipeline_layout,
-            render_pass,
-            triangle_vs,
-            triangle_fs,
-        )
-        .expect("Failed to create graphics pipeline");
+        let pipeline = if RTX {
+            create_graphics_pipeline(
+                &device,
+                pipeline_cache,
+                pipeline_layout,
+                render_pass,
+                meshlet_ms,
+                triangle_fs,
+            )
+            .expect("Failed to create graphics pipeline")
+        } else {
+            create_graphics_pipeline(
+                &device,
+                pipeline_cache,
+                pipeline_layout,
+                render_pass,
+                triangle_vs,
+                triangle_fs,
+            )
+            .expect("Failed to create graphics pipeline")
+        };
+        info!("pipeline created");
 
         let buffer_device_address =
             physical_device_buffer_device_address_features.buffer_device_address == 1;
@@ -834,7 +895,7 @@ impl CendreRenderer {
         let vertex_buffer = Buffer::new(
             &device,
             &mut allocator,
-            128 * 1024 * 1024,
+            if RTX { 0 } else { 128 * 1024 * 1024 },
             vk::BufferUsageFlags::STORAGE_BUFFER,
         )
         .unwrap();
@@ -951,43 +1012,6 @@ struct IndexCount(pub u32);
 
 #[derive(Resource)]
 struct MeshletsSize(pub u32);
-
-fn build_meshlets(mesh: &OptimizedMesh) -> Vec<Meshlet> {
-    todo!()
-}
-
-fn prepare_mesh(
-    mut commands: Commands,
-    mut cendre: ResMut<CendreRenderer>,
-    mut meshes: Query<&mut OptimizedMesh>,
-) {
-    for mut mesh in &mut meshes {
-        if !mesh.prepared {
-            info!("preparing mesh");
-            let start = Instant::now();
-
-            cendre.vertex_buffer.write(&mesh.vertex_buffer);
-            cendre.index_buffer.write(&mesh.index_buffer);
-
-            if RTX {
-                let meshlets = build_meshlets(&mesh);
-                let data = meshlets
-                    .iter()
-                    .flat_map(optimized_mesh::Meshlet::data)
-                    .collect::<Vec<_>>();
-                cendre.mesh_buffer.write(&data);
-                commands.insert_resource(MeshletsSize(meshlets.len() as u32));
-            }
-
-            commands.insert_resource(IndexCount(
-                (mesh.index_buffer.len() / std::mem::size_of::<u32>()) as u32,
-            ));
-
-            info!("mesh prepared in {}ms", start.elapsed().as_millis());
-            mesh.prepared = true;
-        }
-    }
-}
 
 #[allow(clippy::too_many_lines)]
 fn update(

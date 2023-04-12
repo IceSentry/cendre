@@ -1,4 +1,4 @@
-use std::{ffi::OsStr, io::Write};
+use std::{ffi::OsStr, io::Write, path::PathBuf};
 
 use anyhow::Context;
 use bevy::{
@@ -6,7 +6,18 @@ use bevy::{
     winit::WinitPlugin,
 };
 use cendre::obj_loader::{ObjBundle, ObjLoaderPlugin};
-use naga::{valid::Capabilities, ShaderStage};
+use naga::valid::Capabilities;
+
+fn write_binary_file(path: &PathBuf, data: &[u8]) {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path.clone())
+        .context(format!("Failed to open {path:?}"))
+        .unwrap();
+    file.write_all(data).unwrap();
+}
 
 /// Compiles to spir-v any wgsl or glsl shaders found in ./assets/shaders
 /// For glsl it uses .frag.glsl and .vert.glsl to detect the shader stage
@@ -37,27 +48,61 @@ fn compile_shaders() {
                 }
             },
             "glsl" => {
-                let mut parser = naga::front::glsl::Frontend::default();
                 let file_name = entry.file_name().unwrap().to_string_lossy();
-                let options = if file_name.contains(".vert") {
-                    naga::front::glsl::Options::from(ShaderStage::Vertex)
+
+                let compiler = shaderc::Compiler::new().unwrap();
+                let options = shaderc::CompileOptions::new().unwrap();
+                let shader_kind = if file_name.contains(".vert") {
+                    shaderc::ShaderKind::Vertex
                 } else if file_name.contains(".frag") {
-                    naga::front::glsl::Options::from(ShaderStage::Fragment)
+                    shaderc::ShaderKind::Fragment
                 } else if file_name.contains(".mesh") {
-                    naga::front::glsl::Options::from(ShaderStage::Mesh)
+                    shaderc::ShaderKind::Mesh
                 } else {
                     todo!()
                 };
 
-                match parser.parse(&options, &source) {
-                    Ok(module) => module,
-                    Err(errors) => {
-                        for err in errors {
-                            println!("\x1b[91mERROR\x1b[0m {}: {}", entry.to_string_lossy(), err);
-                        }
+                match compiler.compile_into_spirv(
+                    &source,
+                    shader_kind,
+                    &file_name,
+                    "main",
+                    Some(&options),
+                ) {
+                    Ok(result) => {
+                        let mut path = entry;
+                        path.set_extension("spv");
+                        write_binary_file(&path, result.as_binary_u8());
+                    }
+                    Err(err) => {
+                        println!("\x1b[91mERROR\x1b[0m: {}", err);
                         panic!("Invalid glsl shader {}", entry.to_string_lossy())
                     }
                 }
+                continue;
+
+                // TODO naga doesn't currently support the required feature for glsl to use mesh shaders
+                //
+                // let mut parser = naga::front::glsl::Frontend::default();
+                // let options = if file_name.contains(".vert") {
+                //     naga::front::glsl::Options::from(ShaderStage::Vertex)
+                // } else if file_name.contains(".frag") {
+                //     naga::front::glsl::Options::from(ShaderStage::Fragment)
+                // } else if file_name.contains(".mesh") {
+                //     naga::front::glsl::Options::from(ShaderStage::Mesh)
+                // } else {
+                //     todo!()
+                // };
+
+                // match parser.parse(&options, &source) {
+                //     Ok(module) => module,
+                //     Err(errors) => {
+                //         for err in errors {
+                //             println!("\x1b[91mERROR\x1b[0m {}: {}", entry.to_string_lossy(), err);
+                //         }
+                //         panic!("Invalid glsl shader {}", entry.to_string_lossy())
+                //     }
+                // }
             }
             _ => panic!("Unknown shader format"),
         };
@@ -86,19 +131,12 @@ fn compile_shaders() {
         .unwrap();
         let mut path = entry;
         path.set_extension("spv");
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path.clone())
-            .context(format!("Failed to open {path:?}"))
-            .unwrap();
-        file.write_all(
+        write_binary_file(
+            &path,
             &spv.iter()
                 .flat_map(|x| x.to_ne_bytes())
                 .collect::<Vec<u8>>(),
-        )
-        .unwrap();
+        );
     }
 }
 
