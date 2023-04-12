@@ -1,3 +1,2 @@
 /target
-*.spv
-*.obj
+assets/models

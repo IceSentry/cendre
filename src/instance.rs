@@ -387,6 +387,7 @@ impl CendreInstance {
         render_pass: vk::RenderPass,
         stages: &[vk::PipelineShaderStageCreateInfo],
         primitive_topology: vk::PrimitiveTopology,
+        rasterization_state: vk::PipelineRasterizationStateCreateInfo,
     ) -> anyhow::Result<Pipeline> {
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default();
 
@@ -396,10 +397,6 @@ impl CendreInstance {
         let viewport_state = vk::PipelineViewportStateCreateInfo::default()
             .viewport_count(1)
             .scissor_count(1);
-
-        let rasterization_state = vk::PipelineRasterizationStateCreateInfo::default()
-            .polygon_mode(vk::PolygonMode::FILL)
-            .line_width(1.0);
 
         let multisample_state = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);

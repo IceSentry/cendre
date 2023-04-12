@@ -8,6 +8,7 @@
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::missing_panics_doc)]
+#![allow(clippy::type_complexity)]
 
 pub mod instance;
 pub mod obj_loader;
@@ -20,7 +21,7 @@ use std::{borrow::Cow, ffi::CStr, os::raw::c_char};
 use ash::vk;
 use bevy::prelude::*;
 
-pub const RTX: bool = false;
+pub const RTX: bool = true;
 
 fn image_barrier<'a>(
     image: vk::Image,

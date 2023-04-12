@@ -1,3 +1,15 @@
+#![warn(clippy::pedantic)]
+#![allow(clippy::needless_pass_by_value)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_panics_doc)]
+#![allow(clippy::type_complexity)]
+
 use ash::vk;
 use bevy::window::WindowResized;
 use bevy::winit::WinitWindows;
@@ -8,11 +20,11 @@ use bevy::{
 use cendre::instance::{CendreInstance, Pipeline};
 use cendre::obj_loader::{ObjBundle, ObjLoaderPlugin};
 use cendre::optimized_mesh::{
-    prepare_mesh, IndexBuffer, MeshletBuffer, MeshletsSize, OptimizedMesh, VertexBuffer,
+    prepare_mesh, IndexBuffer, MeshletBuffer, MeshletsCount, OptimizedMesh, VertexBuffer,
 };
 use cendre::RTX;
 
-fn main() -> anyhow::Result<()> {
+fn main() {
     App::new()
         .add_plugins(MinimalPlugins)
         .add_plugin(WindowPlugin {
@@ -39,8 +51,6 @@ fn main() -> anyhow::Result<()> {
         .add_system(prepare_mesh.before(update))
         .add_system(update)
         .run();
-
-    Ok(())
 }
 
 fn exit_on_esc(key_input: Res<Input<KeyCode>>, mut exit_events: EventWriter<AppExit>) {
@@ -51,7 +61,7 @@ fn exit_on_esc(key_input: Res<Input<KeyCode>>, mut exit_events: EventWriter<AppE
 
 fn load_mesh(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(ObjBundle {
-        obj: asset_server.load("bunny.obj"),
+        obj: asset_server.load("models/bunny.obj"),
     });
 }
 
@@ -92,46 +102,39 @@ fn init_cendre(
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .stage_flags(vk::ShaderStageFlags::VERTEX)]
     };
-
     let pipeline_layout = cendre.create_pipeline_layout(&bindings).unwrap();
 
-    let triangle_fs = cendre.load_shader(
+    let vertex_shader = if RTX {
+        cendre.load_shader(
+            "assets/shaders/meshlet.mesh.glsl",
+            "main",
+            vk::ShaderStageFlags::MESH_NV,
+        )
+    } else {
+        cendre.load_shader(
+            "assets/shaders/triangle.vert.wgsl",
+            "vertex",
+            vk::ShaderStageFlags::VERTEX,
+        )
+    };
+    let fragment_shader = cendre.load_shader(
         "assets/shaders/triangle.frag.wgsl",
         "fragment",
         vk::ShaderStageFlags::FRAGMENT,
     );
-
-    let pipeline = if RTX {
-        let meshlet_ms = cendre.load_shader(
-            "assets/shaders/meshlet.mesh.glsl",
-            "main",
-            vk::ShaderStageFlags::MESH_NV,
-        );
-        let stages = vec![meshlet_ms.create_info(), triangle_fs.create_info()];
-        cendre
-            .create_graphics_pipeline(
-                pipeline_layout,
-                cendre.render_pass,
-                &stages,
-                vk::PrimitiveTopology::TRIANGLE_LIST,
-            )
-            .expect("Failed to create graphics pipeline")
-    } else {
-        let triangle_vs = cendre.load_shader(
-            "assets/shaders/triangle.vert.wgsl",
-            "vertex",
-            vk::ShaderStageFlags::VERTEX,
-        );
-        let stages = vec![triangle_vs.create_info(), triangle_fs.create_info()];
-        cendre
-            .create_graphics_pipeline(
-                pipeline_layout,
-                cendre.render_pass,
-                &stages,
-                vk::PrimitiveTopology::TRIANGLE_LIST,
-            )
-            .expect("Failed to create graphics pipeline")
-    };
+    let pipeline = cendre
+        .create_graphics_pipeline(
+            pipeline_layout,
+            cendre.render_pass,
+            &[vertex_shader.create_info(), fragment_shader.create_info()],
+            vk::PrimitiveTopology::TRIANGLE_LIST,
+            vk::PipelineRasterizationStateCreateInfo::default()
+                .polygon_mode(vk::PolygonMode::FILL)
+                .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+                .cull_mode(vk::CullModeFlags::BACK)
+                .line_width(1.0),
+        )
+        .expect("Failed to create graphics pipeline");
     info!("Pipeline created");
 
     commands.insert_resource(CendrePipeline(pipeline));
@@ -143,12 +146,12 @@ fn update(
     cendre: Res<CendreInstance>,
     cendre_pipeline: Res<CendrePipeline>,
     windows: Query<&Window>,
-    meshlets_size: Option<Res<MeshletsSize>>,
     meshes: Query<(
         &OptimizedMesh,
         &VertexBuffer,
         &IndexBuffer,
         Option<&MeshletBuffer>,
+        Option<&MeshletsCount>,
     )>,
 ) {
     let window = windows.single();
@@ -197,10 +200,14 @@ fn update(
         );
     }
 
-    for (mesh, vb, ib, mb) in &meshes {
+    for (mesh, vb, ib, mb, meshlets_count) in &meshes {
+        let Some(indices) = &mesh.indices else { continue; };
+
         let vertex_buffer_info = vb.descriptor_info(0);
         if RTX {
             if let Some(mb) = mb {
+                let Some(meshlets_count) = &meshlets_count else { continue; };
+
                 let mesh_buffer_info = mb.descriptor_info(0);
                 let descriptor_writes = [
                     vb.write_descriptor(0, vk::DescriptorType::STORAGE_BUFFER, &vertex_buffer_info),
@@ -214,21 +221,9 @@ fn update(
                         0,
                         &descriptor_writes,
                     );
-                };
-
-                // TODO add to entity
-                if let Some(size) = &meshlets_size {
-                    unsafe {
-                        cendre
-                            .mesh_shader
-                            .cmd_draw_mesh_tasks(command_buffer, size.0, 0);
-                    }
-                }
-
-                if let Some(indices) = &mesh.indices {
-                    unsafe {
-                        device.cmd_draw_indexed(command_buffer, indices.len() as u32, 1, 0, 0, 0);
-                    }
+                    cendre
+                        .mesh_shader
+                        .cmd_draw_mesh_tasks(command_buffer, meshlets_count.0, 0);
                 }
             }
         } else {
@@ -244,21 +239,13 @@ fn update(
                         &vertex_buffer_info,
                     )),
                 );
-            };
-
-            unsafe {
                 device.cmd_bind_index_buffer(
                     command_buffer,
                     ib.vk_buffer(),
                     0,
                     vk::IndexType::UINT32,
                 );
-            }
-
-            if let Some(indices) = &mesh.indices {
-                unsafe {
-                    device.cmd_draw_indexed(command_buffer, indices.len() as u32, 1, 0, 0, 0);
-                }
+                device.cmd_draw_indexed(command_buffer, indices.len() as u32, 1, 0, 0, 0);
             }
         }
     }

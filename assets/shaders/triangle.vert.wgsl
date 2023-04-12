@@ -27,7 +27,9 @@ fn vertex(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
     let normal = vec3(nx, ny, nz) / 127.0 - 1.0;
 
     var out: VertexOutput;
-    out.clip_position = vec4(pos + vec3(0.25, -0.75, 0.5), 1.0);
+    let offset = vec3(0.25, -0.75, 0.0);
+    // let offset = vec3(0.0);
+    out.clip_position = vec4(pos + offset, 1.0);
     out.color = normal * 0.5 + vec3(0.5);
     return out;
 }
