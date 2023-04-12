@@ -58,6 +58,18 @@ pub struct PipelineLayout {
 
 pub struct Shader {
     pub vk_shader_module: Arc<Mutex<vk::ShaderModule>>,
+    pub entry_point: CString,
+    pub stage: vk::ShaderStageFlags,
+}
+
+impl Shader {
+    #[must_use]
+    pub fn create_info(&self) -> vk::PipelineShaderStageCreateInfo {
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(self.stage)
+            .module(*self.vk_shader_module.lock().unwrap())
+            .name(&self.entry_point)
+    }
 }
 
 #[derive(Resource)]
@@ -312,11 +324,21 @@ impl CendreInstance {
     }
 
     // TODO add entry_point and shader stage
-    pub fn load_shader(&mut self, path: &str) -> Shader {
+    pub fn load_shader(
+        &mut self,
+        path: &str,
+        entry_point: &str,
+        stage: vk::ShaderStageFlags,
+    ) -> Shader {
         let vk_shader_module = load_vk_shader_module(&self.device, path).unwrap();
         let vk_shader_module = Arc::new(Mutex::new(vk_shader_module));
         self.shader_modules.push(vk_shader_module.clone());
-        Shader { vk_shader_module }
+        let entry_point = CString::new(entry_point).unwrap();
+        Shader {
+            vk_shader_module,
+            entry_point,
+            stage,
+        }
     }
 
     pub fn create_graphics_pipeline(

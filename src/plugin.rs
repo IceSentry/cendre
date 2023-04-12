@@ -1,5 +1,3 @@
-use std::ffi::CString;
-
 use crate::instance::CendreInstance;
 use crate::optimized_mesh::{
     prepare_mesh, IndexBuffer, MeshletBuffer, MeshletsSize, OptimizedMesh, VertexBuffer,
@@ -55,25 +53,20 @@ fn init_cendre(
 
     let pipeline_layout = cendre.create_pipeline_layout(&bindings).unwrap();
 
-    let vertex_name = CString::new("vertex".to_string()).unwrap();
-    let mesh_name = CString::new("main".to_string()).unwrap();
-    let fragment_name = CString::new("fragment".to_string()).unwrap();
-
-    let triangle_fs = cendre.load_shader("assets/shaders/triangle.frag.wgsl");
+    let triangle_fs = cendre.load_shader(
+        "assets/shaders/triangle.frag.wgsl",
+        "fragment",
+        vk::ShaderStageFlags::FRAGMENT,
+    );
 
     // TODO keep pipeline around and use it in update()
     let _pipeline = if RTX {
-        let meshlet_ms = cendre.load_shader("assets/shaders/meshlet.mesh.glsl");
-        let stages = vec![
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::MESH_NV)
-                .module(*meshlet_ms.vk_shader_module.lock().unwrap())
-                .name(&mesh_name),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(*triangle_fs.vk_shader_module.lock().unwrap())
-                .name(&fragment_name),
-        ];
+        let meshlet_ms = cendre.load_shader(
+            "assets/shaders/meshlet.mesh.glsl",
+            "main",
+            vk::ShaderStageFlags::MESH_NV,
+        );
+        let stages = vec![meshlet_ms.create_info(), triangle_fs.create_info()];
         cendre
             .create_graphics_pipeline(
                 // TODO take the actual struct as param
@@ -84,17 +77,12 @@ fn init_cendre(
             )
             .expect("Failed to create graphics pipeline")
     } else {
-        let triangle_vs = cendre.load_shader("assets/shaders/triangle.vert.wgsl");
-        let stages = vec![
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::VERTEX)
-                .module(*triangle_vs.vk_shader_module.lock().unwrap())
-                .name(&vertex_name),
-            vk::PipelineShaderStageCreateInfo::default()
-                .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(*triangle_fs.vk_shader_module.lock().unwrap())
-                .name(&fragment_name),
-        ];
+        let triangle_vs = cendre.load_shader(
+            "assets/shaders/triangle.vert.wgsl",
+            "vertex",
+            vk::ShaderStageFlags::VERTEX,
+        );
+        let stages = vec![triangle_vs.create_info(), triangle_fs.create_info()];
         cendre
             .create_graphics_pipeline(
                 *pipeline_layout.pipeline_layout.lock().unwrap(),
