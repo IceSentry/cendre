@@ -36,39 +36,17 @@ use gpu_allocator::{
 use optimized_mesh::prepare_mesh;
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
-const RTX: bool = false;
+const RTX: bool = true;
 
 pub struct CendrePlugin;
 impl Plugin for CendrePlugin {
     fn build(&self, app: &mut App) {
-        app
-            // .add_startup_system(hide_window)
-            // .add_startup_system(init_vulkan.after(hide_window))
-            // .add_startup_system(show_window.after(init_vulkan))
-            .add_startup_system(init_vulkan)
+        app.add_startup_system(init_vulkan)
             .add_system(resize.before(update))
             .add_system(prepare_mesh.before(update))
             .add_system(update);
     }
 }
-
-// fn hide_window(windows: Query<Entity, With<Window>>, winit_windows: NonSendMut<WinitWindows>) {
-//     let winit_window = windows
-//         .get_single()
-//         .ok()
-//         .and_then(|window_id| winit_windows.get_window(window_id))
-//         .expect("Failed to get winit window");
-//     winit_window.set_visible(false);
-// }
-
-// fn show_window(windows: Query<Entity, With<Window>>, winit_windows: NonSendMut<WinitWindows>) {
-//     let winit_window = windows
-//         .get_single()
-//         .ok()
-//         .and_then(|window_id| winit_windows.get_window(window_id))
-//         .expect("Failed to get winit window");
-//     winit_window.set_visible(true);
-// }
 
 fn create_render_pass(
     device: &Device,
@@ -895,7 +873,7 @@ impl CendreRenderer {
         let vertex_buffer = Buffer::new(
             &device,
             &mut allocator,
-            if RTX { 0 } else { 128 * 1024 * 1024 },
+            128 * 1024 * 1024,
             vk::BufferUsageFlags::STORAGE_BUFFER,
         )
         .unwrap();
