@@ -1,12 +1,13 @@
 use std::time::Instant;
 
+use ash::vk;
 use bevy::{
     prelude::*,
     render::mesh::{Indices, VertexAttributeValues},
 };
 use bytemuck::cast_slice;
 
-use crate::{CendreRenderer, IndexCount, MeshletsSize, RTX};
+use crate::{Buffer, CendreRenderer, MeshletsSize, RTX};
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
@@ -194,12 +195,19 @@ fn build_meshlets(mesh: &OptimizedMesh) -> Vec<Meshlet> {
     meshlets
 }
 
+#[derive(Component, Deref)]
+pub struct VertexBuffer(pub Buffer);
+#[derive(Component, Deref)]
+pub struct IndexBuffer(pub Buffer);
+#[derive(Component, Deref)]
+pub struct MeshletBuffer(pub Buffer);
+
 pub(crate) fn prepare_mesh(
     mut commands: Commands,
     mut cendre: ResMut<CendreRenderer>,
-    mut meshes: Query<&mut OptimizedMesh>,
+    mut meshes: Query<(Entity, &mut OptimizedMesh)>,
 ) {
-    for mut mesh in &mut meshes {
+    for (entity, mut mesh) in &mut meshes {
         if !mesh.prepared {
             info!("preparing mesh");
             let start = Instant::now();
@@ -210,11 +218,12 @@ pub(crate) fn prepare_mesh(
                 meshopt::generate_vertex_remap(&mesh.vertices, None)
             };
 
-            let vertex_buffer = meshopt::remap_vertex_buffer(&mesh.vertices, vertex_count, &remap)
-                .iter()
-                .flat_map(Vertex::bytes)
-                .collect::<Vec<_>>();
-            let index_buffer = if let Some(indices) = mesh.indices.clone() {
+            let vertex_buffer_data =
+                meshopt::remap_vertex_buffer(&mesh.vertices, vertex_count, &remap)
+                    .iter()
+                    .flat_map(Vertex::bytes)
+                    .collect::<Vec<_>>();
+            let index_buffer_data = if let Some(indices) = mesh.indices.clone() {
                 meshopt::remap_index_buffer(Some(&indices), vertex_count, &remap)
             } else {
                 meshopt::remap_index_buffer(None, vertex_count, &remap)
@@ -223,19 +232,44 @@ pub(crate) fn prepare_mesh(
             .flat_map(|x| x.to_ne_bytes())
             .collect::<Vec<_>>();
 
-            cendre.vertex_buffer.write(&vertex_buffer);
-            cendre.index_buffer.write(&index_buffer);
+            let mut entity_cmd = commands.entity(entity);
+
+            let mut vertex_buffer = cendre
+                .create_buffer(
+                    128 * 1024 * 1024,
+                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    gpu_allocator::MemoryLocation::CpuToGpu,
+                )
+                .unwrap();
+            vertex_buffer.write(&vertex_buffer_data);
+            entity_cmd.insert(VertexBuffer(vertex_buffer));
+
+            let mut index_buffer = cendre
+                .create_buffer(
+                    128 * 1024 * 1024,
+                    vk::BufferUsageFlags::INDEX_BUFFER,
+                    gpu_allocator::MemoryLocation::CpuToGpu,
+                )
+                .unwrap();
+            index_buffer.write(&index_buffer_data);
+            entity_cmd.insert(IndexBuffer(index_buffer));
 
             if RTX {
                 let meshlets = build_meshlets(&mesh);
                 let data = meshlets.iter().flat_map(Meshlet::bytes).collect::<Vec<_>>();
-                cendre.mesh_buffer.write(&data);
+
+                let mut meshlet_buffer = cendre
+                    .create_buffer(
+                        128 * 1024 * 1024,
+                        vk::BufferUsageFlags::STORAGE_BUFFER,
+                        gpu_allocator::MemoryLocation::CpuToGpu,
+                    )
+                    .unwrap();
+                meshlet_buffer.write(&data);
+                entity_cmd.insert(MeshletBuffer(meshlet_buffer));
+
                 commands.insert_resource(MeshletsSize(meshlets.len() as u32));
             }
-
-            commands.insert_resource(IndexCount(
-                (index_buffer.len() / std::mem::size_of::<u32>()) as u32,
-            ));
 
             info!("mesh prepared in {}ms", start.elapsed().as_millis());
             mesh.prepared = true;

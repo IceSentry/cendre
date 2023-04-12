@@ -16,6 +16,7 @@ use std::{
     borrow::Cow,
     ffi::{CStr, CString},
     os::raw::c_char,
+    sync::{Arc, Mutex},
 };
 
 use anyhow::bail;
@@ -33,7 +34,7 @@ use gpu_allocator::{
     vulkan::{Allocation, AllocationCreateDesc, AllocationScheme, Allocator, AllocatorCreateDesc},
     MemoryLocation,
 };
-use optimized_mesh::prepare_mesh;
+use optimized_mesh::{prepare_mesh, IndexBuffer, MeshletBuffer, OptimizedMesh, VertexBuffer};
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 const RTX: bool = false;
@@ -639,56 +640,26 @@ fn image_barrier<'a>(
         .subresource_range(subresource_range)
 }
 
-struct Buffer {
-    raw: vk::Buffer,
-    allocation: Option<Allocation>,
+pub struct Buffer {
+    buffer_raw: Arc<Mutex<vk::Buffer>>,
+    allocation_raw: Arc<Mutex<Option<Allocation>>>,
     size: u64,
 }
 
 impl Buffer {
-    fn new(
-        device: &Device,
-        allocator: &mut Allocator,
-        size: u64,
-        usage: vk::BufferUsageFlags,
-    ) -> anyhow::Result<Self> {
-        let vk_info = vk::BufferCreateInfo::default().size(size).usage(usage);
-        let buffer = unsafe { device.create_buffer(&vk_info, None) }.unwrap();
-        let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
-        let allocation = allocator.allocate(&AllocationCreateDesc {
-            name: "Buffer allocation",
-            requirements,
-            location: MemoryLocation::CpuToGpu,
-            linear: true, // Buffers are always linear
-            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
-        })?;
-
-        // Bind memory to the buffer
-        unsafe {
-            device
-                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
-                .unwrap();
-        };
-        Ok(Self {
-            raw: buffer,
-            allocation: Some(allocation),
-            size,
-        })
-    }
-
     fn write(&mut self, data: &[u8]) {
-        if let Some(slice) = self
-            .allocation
-            .as_mut()
-            .and_then(gpu_allocator::vulkan::Allocation::mapped_slice_mut)
-        {
+        // let mut allocation = self.allocation_raw.lock().unwrap();
+        if let Some(allocation) = self.allocation_raw.lock().unwrap().as_mut() {
+            let slice = allocation.mapped_slice_mut().unwrap();
             slice[..data.len()].copy_from_slice(data);
         }
     }
 
-    fn destroy(&mut self, device: &Device, allocator: &mut Allocator) {
-        unsafe { device.destroy_buffer(self.raw, None) };
-        allocator.free(self.allocation.take().unwrap()).unwrap();
+    fn info(&self, offset: vk::DeviceSize) -> vk::DescriptorBufferInfo {
+        vk::DescriptorBufferInfo::default()
+            .buffer(*self.buffer_raw.lock().unwrap())
+            .offset(offset)
+            .range(self.size)
     }
 }
 
@@ -717,10 +688,9 @@ struct CendreRenderer {
     pipeline_layout: vk::PipelineLayout,
     triangle_vs: vk::ShaderModule,
     triangle_fs: vk::ShaderModule,
-    allocator: Option<Allocator>,
-    vertex_buffer: Buffer,
-    index_buffer: Buffer,
-    mesh_buffer: Buffer,
+    allocator: Allocator,
+    allocations: Vec<Arc<Mutex<Option<Allocation>>>>,
+    buffers: Vec<Arc<Mutex<vk::Buffer>>>,
     desciptor_set_layouts: [vk::DescriptorSetLayout; 1],
 }
 
@@ -870,35 +840,13 @@ impl CendreRenderer {
 
         let buffer_device_address =
             physical_device_buffer_device_address_features.buffer_device_address == 1;
-        let mut allocator = Allocator::new(&AllocatorCreateDesc {
+        let allocator = Allocator::new(&AllocatorCreateDesc {
             instance: instance.clone(),
             device: device.clone(),
             physical_device,
             debug_settings: default(),
             buffer_device_address,
         })
-        .unwrap();
-
-        let vertex_buffer = Buffer::new(
-            &device,
-            &mut allocator,
-            128 * 1024 * 1024,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-        )
-        .unwrap();
-        let index_buffer = Buffer::new(
-            &device,
-            &mut allocator,
-            128 * 1024 * 1024,
-            vk::BufferUsageFlags::INDEX_BUFFER,
-        )
-        .unwrap();
-        let mesh_buffer = Buffer::new(
-            &device,
-            &mut allocator,
-            128 * 1024 * 1024,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-        )
         .unwrap();
 
         Self {
@@ -925,12 +873,48 @@ impl CendreRenderer {
             pipeline_layout,
             triangle_vs,
             triangle_fs,
-            allocator: Some(allocator),
-            vertex_buffer,
-            index_buffer,
-            mesh_buffer,
+            allocator,
+            allocations: vec![],
+            buffers: vec![],
             desciptor_set_layouts,
         }
+    }
+
+    fn create_buffer(
+        &mut self,
+        size: u64,
+        usage: vk::BufferUsageFlags,
+        location: MemoryLocation,
+    ) -> anyhow::Result<Buffer> {
+        let vk_info = vk::BufferCreateInfo::default().size(size).usage(usage);
+        let buffer = unsafe { self.device.create_buffer(&vk_info, None) }.unwrap();
+        let requirements = unsafe { self.device.get_buffer_memory_requirements(buffer) };
+        let allocation = self.allocator.allocate(&AllocationCreateDesc {
+            name: &format!("usage: {usage:?} size: {size} "),
+            requirements,
+            location,
+            linear: true,
+            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+        })?;
+
+        // Bind memory to the buffer
+        unsafe {
+            self.device
+                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+                .unwrap();
+        };
+
+        let buffer_raw = Arc::new(Mutex::new(buffer));
+        let allocation_raw = Arc::new(Mutex::new(Some(allocation)));
+
+        self.buffers.push(buffer_raw.clone());
+        self.allocations.push(allocation_raw.clone());
+
+        Ok(Buffer {
+            buffer_raw,
+            allocation_raw,
+            size,
+        })
     }
 }
 
@@ -945,10 +929,14 @@ impl Drop for CendreRenderer {
                 self.device.destroy_descriptor_set_layout(layout, None);
             }
 
-            self.vertex_buffer
-                .destroy(&self.device, self.allocator.as_mut().unwrap());
-            self.index_buffer
-                .destroy(&self.device, self.allocator.as_mut().unwrap());
+            for buffer in &self.buffers {
+                let buffer = buffer.lock().unwrap();
+                self.device.destroy_buffer(*buffer, None);
+            }
+            for allocation in &self.allocations {
+                let allocation = allocation.lock().unwrap().take().unwrap();
+                self.allocator.free(allocation).unwrap();
+            }
 
             self.swapchain.destroy(&self.device, &self.swapchain_loader);
 
@@ -965,8 +953,6 @@ impl Drop for CendreRenderer {
 
             self.device.destroy_semaphore(self.acquire_semaphore, None);
             self.device.destroy_semaphore(self.release_semaphore, None);
-
-            drop(self.allocator.take().unwrap());
 
             self.device.destroy_device(None);
 
@@ -995,17 +981,19 @@ fn init_vulkan(
 }
 
 #[derive(Resource)]
-struct IndexCount(pub u32);
-
-#[derive(Resource)]
 struct MeshletsSize(pub u32);
 
 #[allow(clippy::too_many_lines)]
 fn update(
     cendre: Res<CendreRenderer>,
     windows: Query<&Window>,
-    index_count: Option<Res<IndexCount>>,
     meshlets_size: Option<Res<MeshletsSize>>,
+    meshes: Query<(
+        &OptimizedMesh,
+        &VertexBuffer,
+        &IndexBuffer,
+        Option<&MeshletBuffer>,
+    )>,
 ) {
     let window = windows.single();
     let acquire_semaphores = [cendre.acquire_semaphore];
@@ -1110,76 +1098,75 @@ fn update(
         );
     }
 
-    let vertex_buffer_info = [vk::DescriptorBufferInfo::default()
-        .buffer(cendre.vertex_buffer.raw)
-        .offset(0)
-        .range(cendre.vertex_buffer.size)];
+    for (mesh, vb, ib, mb) in &meshes {
+        let vertex_buffer_info = [vb.info(0)];
 
-    if RTX {
-        let mesh_buffer_info = [vk::DescriptorBufferInfo::default()
-            .buffer(cendre.mesh_buffer.raw)
-            .offset(0)
-            .range(cendre.mesh_buffer.size)];
-        let descriptor_writes = [
-            vk::WriteDescriptorSet::default()
+        if RTX {
+            if let Some(mb) = mb {
+                let mesh_buffer_info = [mb.info(0)];
+                let descriptor_writes = [
+                    vk::WriteDescriptorSet::default()
+                        .dst_binding(0)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(&vertex_buffer_info),
+                    vk::WriteDescriptorSet::default()
+                        .dst_binding(1)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .buffer_info(&mesh_buffer_info),
+                ];
+                unsafe {
+                    cendre.push_descriptor.cmd_push_descriptor_set(
+                        command_buffer,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        cendre.pipeline_layout,
+                        0,
+                        &descriptor_writes,
+                    );
+                };
+
+                // TODO add to entity
+                if let Some(size) = &meshlets_size {
+                    unsafe {
+                        cendre
+                            .mesh_shader
+                            .cmd_draw_mesh_tasks(command_buffer, size.0, 0);
+                    }
+                }
+
+                if let Some(indices) = &mesh.indices {
+                    unsafe {
+                        device.cmd_draw_indexed(command_buffer, indices.len() as u32, 1, 0, 0, 0);
+                    }
+                }
+            }
+        } else {
+            let descriptor_writes = [vk::WriteDescriptorSet::default()
                 .dst_binding(0)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(&vertex_buffer_info),
-            vk::WriteDescriptorSet::default()
-                .dst_binding(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(&mesh_buffer_info),
-        ];
-        unsafe {
-            cendre.push_descriptor.cmd_push_descriptor_set(
-                command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                cendre.pipeline_layout,
-                0,
-                &descriptor_writes,
-            );
-        };
-
-        if let Some(size) = meshlets_size {
+                .buffer_info(&vertex_buffer_info)];
             unsafe {
-                cendre
-                    .mesh_shader
-                    .cmd_draw_mesh_tasks(command_buffer, size.0, 0);
+                cendre.push_descriptor.cmd_push_descriptor_set(
+                    command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    cendre.pipeline_layout,
+                    0,
+                    &descriptor_writes,
+                );
+            };
+
+            unsafe {
+                device.cmd_bind_index_buffer(
+                    command_buffer,
+                    *ib.buffer_raw.lock().unwrap(),
+                    0,
+                    vk::IndexType::UINT32,
+                );
             }
-        }
 
-        unsafe {
-            if let Some(index_count) = index_count {
-                device.cmd_draw_indexed(command_buffer, index_count.0, 1, 0, 0, 0);
-            }
-        }
-    } else {
-        let descriptor_writes = [vk::WriteDescriptorSet::default()
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .buffer_info(&vertex_buffer_info)];
-        unsafe {
-            cendre.push_descriptor.cmd_push_descriptor_set(
-                command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                cendre.pipeline_layout,
-                0,
-                &descriptor_writes,
-            );
-        };
-
-        unsafe {
-            device.cmd_bind_index_buffer(
-                command_buffer,
-                cendre.index_buffer.raw,
-                0,
-                vk::IndexType::UINT32,
-            );
-        }
-
-        unsafe {
-            if let Some(index_count) = index_count {
-                device.cmd_draw_indexed(command_buffer, index_count.0, 1, 0, 0, 0);
+            if let Some(indices) = &mesh.indices {
+                unsafe {
+                    device.cmd_draw_indexed(command_buffer, indices.len() as u32, 1, 0, 0, 0);
+                }
             }
         }
     }
