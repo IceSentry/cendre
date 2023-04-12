@@ -664,7 +664,7 @@ impl Buffer {
 }
 
 #[derive(Resource)]
-struct CendreRenderer {
+struct CendreInstance {
     instance: Instance,
     device: Device,
     push_descriptor: PushDescriptor,
@@ -694,7 +694,7 @@ struct CendreRenderer {
     desciptor_set_layouts: [vk::DescriptorSetLayout; 1],
 }
 
-impl CendreRenderer {
+impl CendreInstance {
     #[allow(clippy::too_many_lines)]
     fn init(winit_window: &winit::window::Window) -> Self {
         let entry = Entry::linked();
@@ -918,7 +918,7 @@ impl CendreRenderer {
     }
 }
 
-impl Drop for CendreRenderer {
+impl Drop for CendreInstance {
     fn drop(&mut self) {
         unsafe {
             self.device.device_wait_idle().unwrap();
@@ -977,7 +977,7 @@ fn init_vulkan(
         .and_then(|window_id| winit_windows.get_window(window_id))
         .expect("Failed to get winit window");
 
-    commands.insert_resource(CendreRenderer::init(winit_window));
+    commands.insert_resource(CendreInstance::init(winit_window));
 }
 
 #[derive(Resource)]
@@ -985,7 +985,7 @@ struct MeshletsSize(pub u32);
 
 #[allow(clippy::too_many_lines)]
 fn update(
-    cendre: Res<CendreRenderer>,
+    cendre: Res<CendreInstance>,
     windows: Query<&Window>,
     meshlets_size: Option<Res<MeshletsSize>>,
     meshes: Query<(
@@ -1233,7 +1233,7 @@ unsafe fn c_char_buf_to_string<'a>(buf: *const c_char) -> Cow<'a, str> {
     unsafe { CStr::from_ptr(buf) }.to_string_lossy()
 }
 
-fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreRenderer>) {
+fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreInstance>) {
     if events.is_empty() {
         return;
     }

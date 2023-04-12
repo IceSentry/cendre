@@ -7,7 +7,7 @@ use bevy::{
 };
 use bytemuck::cast_slice;
 
-use crate::{Buffer, CendreRenderer, MeshletsSize, RTX};
+use crate::{Buffer, CendreInstance, MeshletsSize, RTX};
 
 #[repr(C)]
 #[derive(Copy, Clone, Default)]
@@ -204,7 +204,7 @@ pub struct MeshletBuffer(pub Buffer);
 
 pub(crate) fn prepare_mesh(
     mut commands: Commands,
-    mut cendre: ResMut<CendreRenderer>,
+    mut cendre: ResMut<CendreInstance>,
     mut meshes: Query<(Entity, &mut OptimizedMesh)>,
 ) {
     for (entity, mut mesh) in &mut meshes {
