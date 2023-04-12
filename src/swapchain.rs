@@ -4,6 +4,8 @@ use ash::{
     Device,
 };
 
+// TODO could also hold present_queue and swapchain_loader
+// This would make it possible to use it for submit/present
 pub struct CendreSwapchain {
     pub swapchain: vk::SwapchainKHR,
     pub images: Vec<vk::Image>,
@@ -148,6 +150,8 @@ impl CendreSwapchain {
         new_swapchain
     }
 
+    // TODO consider using Arc<Mutex<T>> for stuff that needs to be destroyed
+    // This would make it possible to have the swapchain on it's own
     pub fn destroy(&self, device: &Device, swapchain_loader: &Swapchain) {
         for framebuffer in &self.framebuffers {
             unsafe { device.destroy_framebuffer(*framebuffer, None) };
