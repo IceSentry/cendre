@@ -190,20 +190,19 @@ impl CendreInstance {
         let release_semaphore = create_semaphore(&device).expect("Failed to create semaphore");
         let present_queue = unsafe { device.get_device_queue(queue_family_index as u32, 0) };
 
-        // TODO don't load the shaders in the instance init
-
-        let meshlet_ms = load_shader(&device, "assets/shaders/meshlet.mesh.glsl")
-            .expect("Failed to load meshlet mesh shader");
-        let triangle_vs = load_shader(&device, "assets/shaders/triangle.vert.wgsl")
-            .expect("Failed to load triangle vertex shader");
+        let mut shader_modules = vec![];
         let triangle_fs = load_shader(&device, "assets/shaders/triangle.frag.wgsl")
             .expect("Failed to load triangle fragment shader");
+        shader_modules.push(triangle_fs);
 
         let create_info = vk::PipelineCacheCreateInfo::default();
         let pipeline_cache = unsafe { device.create_pipeline_cache(&create_info, None).unwrap() };
 
         let (pipeline_layout, desciptor_set_layouts) = create_pipeline_layout(&device).unwrap();
         let pipeline = if RTX {
+            let meshlet_ms = load_shader(&device, "assets/shaders/meshlet.mesh.glsl")
+                .expect("Failed to load meshlet mesh shader");
+            shader_modules.push(meshlet_ms);
             create_graphics_pipeline(
                 &device,
                 pipeline_cache,
@@ -214,6 +213,10 @@ impl CendreInstance {
             )
             .expect("Failed to create graphics pipeline")
         } else {
+            let triangle_vs = load_shader(&device, "assets/shaders/triangle.vert.wgsl")
+                .expect("Failed to load triangle vertex shader");
+            shader_modules.push(triangle_vs);
+
             create_graphics_pipeline(
                 &device,
                 pipeline_cache,
@@ -259,7 +262,7 @@ impl CendreInstance {
             pipeline_cache,
             pipeline,
             pipeline_layout,
-            shader_modules: vec![triangle_vs, triangle_fs, meshlet_ms],
+            shader_modules,
             allocator,
             allocations: vec![],
             buffers: vec![],
