@@ -22,7 +22,9 @@ use gpu_allocator::{
 };
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
-use crate::{c_char_buf_to_string, image_barrier, swapchain::CendreSwapchain, RTX};
+use crate::{
+    c_char_buf_to_string, image_barrier, shaders::load_shader, swapchain::CendreSwapchain, RTX,
+};
 
 pub struct Buffer {
     pub buffer_raw: Arc<Mutex<vk::Buffer>>,
@@ -73,6 +75,7 @@ pub struct CendreInstance {
     pub pipeline_layout: vk::PipelineLayout,
     pub triangle_vs: vk::ShaderModule,
     pub triangle_fs: vk::ShaderModule,
+    pub meshlet_ms: vk::ShaderModule,
     pub allocator: Allocator,
     pub allocations: Vec<Arc<Mutex<Option<Allocation>>>>,
     pub buffers: Vec<Arc<Mutex<vk::Buffer>>>,
@@ -189,6 +192,8 @@ impl CendreInstance {
         let release_semaphore = create_semaphore(&device).expect("Failed to create semaphore");
         let present_queue = unsafe { device.get_device_queue(queue_family_index as u32, 0) };
 
+        // TODO don't load the shaders in the instance init
+
         let meshlet_ms = load_shader(&device, "assets/shaders/meshlet.mesh.spv")
             .expect("Failed to load meshlet mesh shader");
         let triangle_vs = load_shader(&device, "assets/shaders/triangle.vert.spv")
@@ -258,6 +263,7 @@ impl CendreInstance {
             pipeline_layout,
             triangle_vs,
             triangle_fs,
+            meshlet_ms,
             allocator,
             allocations: vec![],
             buffers: vec![],
@@ -465,6 +471,7 @@ impl Drop for CendreInstance {
             self.device
                 .destroy_pipeline_cache(self.pipeline_cache, None);
 
+            self.device.destroy_shader_module(self.meshlet_ms, None);
             self.device.destroy_shader_module(self.triangle_vs, None);
             self.device.destroy_shader_module(self.triangle_fs, None);
 
@@ -712,15 +719,6 @@ fn create_command_pool(device: &Device, queue_family_index: u32) -> vk::CommandP
 fn create_semaphore(device: &Device) -> anyhow::Result<vk::Semaphore> {
     let semaphore_create_info = vk::SemaphoreCreateInfo::default();
     Ok(unsafe { device.create_semaphore(&semaphore_create_info, None)? })
-}
-
-fn load_shader(device: &Device, path: &str) -> anyhow::Result<vk::ShaderModule> {
-    info!("loading {path}");
-    let mut shader_file = std::fs::File::open(path)?;
-    let spv = ash::util::read_spv(&mut shader_file)?;
-
-    let create_info = vk::ShaderModuleCreateInfo::default().code(&spv);
-    Ok(unsafe { device.create_shader_module(&create_info, None)? })
 }
 
 fn create_pipeline_layout(
