@@ -10,6 +10,8 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::type_complexity)]
 
+use std::time::Instant;
+
 use ash::vk;
 use bevy::window::WindowResized;
 use bevy::winit::WinitWindows;
@@ -145,7 +147,7 @@ fn init_cendre(
 fn update(
     cendre: Res<CendreInstance>,
     cendre_pipeline: Res<CendrePipeline>,
-    windows: Query<&Window>,
+    mut windows: Query<&mut Window>,
     meshes: Query<(
         &OptimizedMesh,
         &VertexBuffer,
@@ -154,7 +156,9 @@ fn update(
         Option<&MeshletsCount>,
     )>,
 ) {
-    let window = windows.single();
+    let begin_frame = Instant::now();
+
+    let mut window = windows.single_mut();
 
     let device = &cendre.device;
     let pipeline = &cendre_pipeline.0;
@@ -259,6 +263,12 @@ fn update(
     // END
 
     cendre.end_frame(image_index, command_buffer);
+
+    window.title = format!(
+        "cpu: {:.3}ms gpu: {}ms",
+        begin_frame.elapsed().as_secs_f32() * 1000.0,
+        0.0
+    );
 }
 
 fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreInstance>) {
