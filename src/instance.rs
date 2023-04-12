@@ -22,7 +22,7 @@ use gpu_allocator::{
 };
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
-use crate::{c_char_buf_to_string, swapchain::CendreSwapchain, RTX};
+use crate::{c_char_buf_to_string, image_barrier, swapchain::CendreSwapchain, RTX};
 
 pub struct Buffer {
     pub buffer_raw: Arc<Mutex<vk::Buffer>>,
@@ -300,6 +300,140 @@ impl CendreInstance {
             allocation_raw,
             size,
         })
+    }
+
+    #[must_use]
+    pub fn begin_frame(&self) -> (u32, vk::CommandBuffer) {
+        let (image_index, _) = unsafe {
+            self.swapchain_loader
+                .acquire_next_image(
+                    self.swapchain.swapchain,
+                    0,
+                    self.acquire_semaphore,
+                    vk::Fence::null(),
+                )
+                .expect("Failed to acquire next image")
+        };
+
+        unsafe {
+            self.device
+                .reset_command_pool(self.command_pool, vk::CommandPoolResetFlags::empty())
+                .expect("Failed to reset command_pool");
+        }
+
+        let command_buffer = self.command_buffers[0];
+
+        unsafe {
+            let begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            self.device
+                .begin_command_buffer(command_buffer, &begin_info)
+                .unwrap();
+        }
+
+        unsafe {
+            let render_begin_barrier = image_barrier(
+                self.swapchain.images[image_index as usize],
+                vk::AccessFlags::empty(),
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            );
+            self.device.cmd_pipeline_barrier(
+                command_buffer,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::DependencyFlags::BY_REGION,
+                &[],
+                &[],
+                &[render_begin_barrier],
+            );
+        }
+        (image_index, command_buffer)
+    }
+
+    pub fn end_frame(&self, image_index: u32, command_buffer: vk::CommandBuffer) {
+        unsafe {
+            let render_end_barrier = image_barrier(
+                self.swapchain.images[image_index as usize],
+                vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                vk::AccessFlags::empty(),
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                vk::ImageLayout::PRESENT_SRC_KHR,
+            );
+            self.device.cmd_pipeline_barrier(
+                command_buffer,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::TOP_OF_PIPE,
+                vk::DependencyFlags::BY_REGION,
+                &[],
+                &[],
+                &[render_end_barrier],
+            );
+        }
+
+        unsafe {
+            self.device.end_command_buffer(command_buffer).unwrap();
+        }
+
+        self.submit();
+        self.present(image_index);
+
+        unsafe {
+            self.device.device_wait_idle().unwrap();
+        }
+    }
+
+    pub fn submit(&self) {
+        let acquire_semaphores = [self.acquire_semaphore];
+        let release_semaphores = [self.release_semaphore];
+        unsafe {
+            let submits = [vk::SubmitInfo::default()
+                .wait_semaphores(&acquire_semaphores)
+                .wait_dst_stage_mask(std::slice::from_ref(
+                    &vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                ))
+                .command_buffers(&self.command_buffers)
+                .signal_semaphores(&release_semaphores)];
+            self.device
+                .queue_submit(self.present_queue, &submits, vk::Fence::null())
+                .unwrap();
+        }
+    }
+
+    pub fn present(&self, image_index: u32) {
+        let release_semaphores = [self.release_semaphore];
+        unsafe {
+            let present_info = vk::PresentInfoKHR::default()
+                .swapchains(std::slice::from_ref(&self.swapchain.swapchain))
+                .image_indices(std::slice::from_ref(&image_index))
+                .wait_semaphores(&release_semaphores);
+            self.swapchain_loader
+                .queue_present(self.present_queue, &present_info)
+                .expect("Failed to queue present");
+        }
+    }
+
+    pub fn set_viewport(&self, command_buffer: vk::CommandBuffer, width: u32, height: u32) {
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: height as f32,
+            width: width as f32,
+            height: -(height as f32),
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        let scissor =
+            vk::Rect2D::default().extent(vk::Extent2D::default().width(width).height(height));
+
+        unsafe {
+            self.device
+                .cmd_set_viewport(command_buffer, 0, std::slice::from_ref(&viewport));
+        };
+        unsafe {
+            self.device
+                .cmd_set_scissor(command_buffer, 0, std::slice::from_ref(&scissor));
+        };
     }
 }
 

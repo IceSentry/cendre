@@ -2,7 +2,7 @@ use crate::instance::CendreInstance;
 use crate::optimized_mesh::{
     prepare_mesh, IndexBuffer, MeshletBuffer, MeshletsSize, OptimizedMesh, VertexBuffer,
 };
-use crate::{image_barrier, RTX};
+use crate::RTX;
 use ash::vk;
 use bevy::winit::WinitWindows;
 use bevy::{prelude::*, window::WindowResized};
@@ -44,60 +44,14 @@ fn update(
     )>,
 ) {
     let window = windows.single();
-    let acquire_semaphores = [cendre.acquire_semaphore];
-    let release_semaphores = [cendre.release_semaphore];
+
     let device = &cendre.device;
-
-    let (image_index, _) = unsafe {
-        cendre
-            .swapchain_loader
-            .acquire_next_image(
-                cendre.swapchain.swapchain,
-                0,
-                cendre.acquire_semaphore,
-                vk::Fence::null(),
-            )
-            .expect("Failed to acquire next image")
-    };
-
-    unsafe {
-        device
-            .reset_command_pool(cendre.command_pool, vk::CommandPoolResetFlags::empty())
-            .expect("Failed to reset command_pool");
-    }
-
-    let command_buffer = cendre.command_buffers[0];
 
     // BEGIN
 
-    unsafe {
-        let begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-        device
-            .begin_command_buffer(command_buffer, &begin_info)
-            .unwrap();
-    }
+    let (image_index, command_buffer) = cendre.begin_frame();
 
-    unsafe {
-        let render_begin_barrier = image_barrier(
-            cendre.swapchain.images[image_index as usize],
-            vk::AccessFlags::empty(),
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-        );
-        device.cmd_pipeline_barrier(
-            command_buffer,
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            vk::DependencyFlags::BY_REGION,
-            &[],
-            &[],
-            &[render_begin_barrier],
-        );
-    }
-
-    // CLEAR
+    // BEGIN RENDER PASS
 
     unsafe {
         let clear_color = vk::ClearValue {
@@ -124,19 +78,7 @@ fn update(
 
     let width = window.physical_width();
     let height = window.physical_height();
-
-    let viewport = vk::Viewport {
-        x: 0.0,
-        y: height as f32,
-        width: width as f32,
-        height: -(height as f32),
-        min_depth: 0.0,
-        max_depth: 1.0,
-    };
-    let scissor = vk::Rect2D::default().extent(vk::Extent2D::default().width(width).height(height));
-
-    unsafe { device.cmd_set_viewport(command_buffer, 0, std::slice::from_ref(&viewport)) };
-    unsafe { device.cmd_set_scissor(command_buffer, 0, std::slice::from_ref(&scissor)) };
+    cendre.set_viewport(command_buffer, width, height);
 
     unsafe {
         device.cmd_bind_pipeline(
@@ -219,62 +161,15 @@ fn update(
         }
     }
 
-    // END
+    // END RENDER PASS
 
     unsafe {
         device.cmd_end_render_pass(command_buffer);
     }
 
-    unsafe {
-        let render_end_barrier = image_barrier(
-            cendre.swapchain.images[image_index as usize],
-            vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-            vk::AccessFlags::empty(),
-            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            vk::ImageLayout::PRESENT_SRC_KHR,
-        );
-        device.cmd_pipeline_barrier(
-            command_buffer,
-            vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            vk::PipelineStageFlags::TOP_OF_PIPE,
-            vk::DependencyFlags::BY_REGION,
-            &[],
-            &[],
-            &[render_end_barrier],
-        );
-    }
+    // END
 
-    unsafe {
-        device.end_command_buffer(command_buffer).unwrap();
-    }
-
-    unsafe {
-        let submits = [vk::SubmitInfo::default()
-            .wait_semaphores(&acquire_semaphores)
-            .wait_dst_stage_mask(std::slice::from_ref(
-                &vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            ))
-            .command_buffers(&cendre.command_buffers)
-            .signal_semaphores(&release_semaphores)];
-        device
-            .queue_submit(cendre.present_queue, &submits, vk::Fence::null())
-            .unwrap();
-    }
-
-    unsafe {
-        let present_info = vk::PresentInfoKHR::default()
-            .swapchains(std::slice::from_ref(&cendre.swapchain.swapchain))
-            .image_indices(std::slice::from_ref(&image_index))
-            .wait_semaphores(&release_semaphores);
-        cendre
-            .swapchain_loader
-            .queue_present(cendre.present_queue, &present_info)
-            .expect("Failed to queue present");
-    }
-
-    unsafe {
-        device.device_wait_idle().unwrap();
-    }
+    cendre.end_frame(image_index, command_buffer);
 }
 
 fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreInstance>) {
