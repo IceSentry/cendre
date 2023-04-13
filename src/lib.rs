@@ -21,7 +21,7 @@ use std::{borrow::Cow, ffi::CStr, os::raw::c_char};
 use ash::vk;
 use bevy::prelude::*;
 
-pub const RTX: bool = true;
+pub const RTX: bool = false;
 
 fn image_barrier<'a>(
     image: vk::Image,

@@ -50,7 +50,11 @@ void main()
 		vec2 texcoord = vec2(vertices[vi].tu, vertices[vi].tv);
 
 		vec3 offset = vec3(0.25, -0.75, 0.0);
-		gl_MeshVerticesNV[i].gl_Position = vec4(position + offset, 1.0);
+		// vec3 offset = vec3(0.0, 0.0, 0.5);
+
+		float scale = 1.0;
+
+		gl_MeshVerticesNV[i].gl_Position = vec4(position * scale + offset, 1.0);
 		color[i] = vec4(normal * 0.5 + vec3(0.5), 1.0);
 	}
 

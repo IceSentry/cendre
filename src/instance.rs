@@ -141,6 +141,7 @@ pub struct CendreInstance {
     allocator: Allocator,
     allocations: Vec<Arc<Mutex<Option<Allocation>>>>,
     buffers: Vec<Arc<Mutex<vk::Buffer>>>,
+    query_pool: vk::QueryPool,
 }
 
 impl CendreInstance {
@@ -168,6 +169,9 @@ impl CendreInstance {
 
         let (physical_device, queue_family_index) =
             select_physical_device(&instance, &surface_loader, surface).expect("No GPU found");
+
+        let props = unsafe { instance.get_physical_device_properties(physical_device) };
+        assert!(props.limits.timestamp_compute_and_graphics == 1);
 
         let queue_info = vk::DeviceQueueCreateInfo::default()
             .queue_family_index(queue_family_index as u32)
@@ -241,6 +245,11 @@ impl CendreInstance {
 
         info!("swapchain created");
 
+        let create_info = vk::QueryPoolCreateInfo::default()
+            .query_type(vk::QueryType::TIMESTAMP)
+            .query_count(128);
+        let query_pool = unsafe { device.create_query_pool(&create_info, None).unwrap() };
+
         let command_pool = create_command_pool(&device, queue_family_index as u32);
 
         let allocate_info = vk::CommandBufferAllocateInfo::default()
@@ -294,6 +303,7 @@ impl CendreInstance {
             allocator,
             allocations: vec![],
             buffers: vec![],
+            query_pool,
         }
     }
 
@@ -476,6 +486,17 @@ impl CendreInstance {
         }
 
         unsafe {
+            self.device
+                .cmd_reset_query_pool(command_buffer, self.query_pool, 0, 128);
+            self.device.cmd_write_timestamp(
+                command_buffer,
+                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                self.query_pool,
+                0,
+            );
+        }
+
+        unsafe {
             let render_begin_barrier = image_barrier(
                 self.swapchain.images[image_index as usize],
                 vk::AccessFlags::empty(),
@@ -496,7 +517,8 @@ impl CendreInstance {
         (image_index, command_buffer)
     }
 
-    pub fn end_frame(&self, image_index: u32, command_buffer: vk::CommandBuffer) {
+    #[must_use]
+    pub fn end_frame(&self, image_index: u32, command_buffer: vk::CommandBuffer) -> (f64, f64) {
         unsafe {
             let render_end_barrier = image_barrier(
                 self.swapchain.images[image_index as usize],
@@ -517,6 +539,15 @@ impl CendreInstance {
         }
 
         unsafe {
+            self.device.cmd_write_timestamp(
+                command_buffer,
+                vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                self.query_pool,
+                1,
+            );
+        }
+
+        unsafe {
             self.device.end_command_buffer(command_buffer).unwrap();
         }
 
@@ -526,6 +557,28 @@ impl CendreInstance {
         unsafe {
             self.device.device_wait_idle().unwrap();
         }
+
+        let mut data: [i64; 2] = [0, 0];
+        unsafe {
+            self.device
+                .get_query_pool_results(
+                    self.query_pool,
+                    0,
+                    &mut data,
+                    vk::QueryResultFlags::TYPE_64,
+                )
+                .unwrap();
+        }
+
+        let props = unsafe {
+            self.instance
+                .get_physical_device_properties(self.physical_device)
+        };
+        let period = f64::from(props.limits.timestamp_period);
+        let to_ms = 1e-6;
+        let frame_gpu_begin = (data[0] as f64) * period * to_ms;
+        let frame_gpu_end = (data[1] as f64) * period * to_ms;
+        (frame_gpu_begin, frame_gpu_end)
     }
 
     pub fn submit(&self) {
@@ -585,6 +638,8 @@ impl Drop for CendreInstance {
     fn drop(&mut self) {
         unsafe {
             self.device.device_wait_idle().unwrap();
+
+            self.device.destroy_query_pool(self.query_pool, None);
 
             self.device.destroy_command_pool(self.command_pool, None);
 
@@ -652,19 +707,14 @@ fn create_instance(
         .engine_version(0)
         .api_version(vk::make_api_version(0, 1, 1, 0));
 
-    let debug_layers_raw: Vec<*const c_char> = [
-        #[cfg(debug_assertions)]
-        unsafe {
-            CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_KHRONOS_validation\0")
-        },
-    ]
-    .iter()
-    .map(|raw_name: &&CStr| raw_name.as_ptr())
-    .collect();
+    let debug_layers_raw: Vec<*const c_char> =
+        [unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_LAYER_KHRONOS_validation\0") }]
+            .iter()
+            .map(|raw_name: &&CStr| raw_name.as_ptr())
+            .collect();
 
     let mut extension_names =
         ash_window::enumerate_required_extensions(winit_window.raw_display_handle())?.to_vec();
-    #[cfg(debug_assertions)]
     {
         extension_names.push(DebugUtils::NAME.as_ptr());
     }

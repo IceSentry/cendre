@@ -70,7 +70,6 @@ pub struct OptimizedMesh {
 
 impl OptimizedMesh {
     pub fn from_bevy_mesh(mesh: &Mesh) -> OptimizedMesh {
-        // Meshopt version
         let vertices = {
             let pos = mesh
                 .attribute(Mesh::ATTRIBUTE_POSITION)
@@ -98,7 +97,8 @@ impl OptimizedMesh {
             let uvs = mesh
                 .attribute(Mesh::ATTRIBUTE_UV_0)
                 .and_then(as_float2)
-                .unwrap();
+                .map(<[[f32; 2]]>::to_vec)
+                .unwrap_or(vec![[0.0, 0.0]; pos.len()]);
 
             let mut vertices = vec![];
             for (pos, (norm, uv)) in pos.iter().zip(norms.iter().zip(uvs.iter())) {
@@ -199,6 +199,7 @@ pub struct MeshletBuffer(pub Buffer);
 #[derive(Component)]
 pub struct MeshletsCount(pub u32);
 
+// TODO async
 pub fn prepare_mesh(
     mut commands: Commands,
     mut cendre: ResMut<CendreInstance>,
@@ -214,6 +215,7 @@ pub fn prepare_mesh(
             // let index_buffer_data = mesh.get_index_buffer_bytes().unwrap().to_vec();
 
             let (vertex_count, remap) = if let Some(indices) = mesh.indices.clone() {
+                info!("Triangles: {}", indices.len() / 3);
                 meshopt::generate_vertex_remap(&mesh.vertices, Some(&indices))
             } else {
                 meshopt::generate_vertex_remap(&mesh.vertices, None)
@@ -257,6 +259,7 @@ pub fn prepare_mesh(
 
             if RTX {
                 let meshlets = build_meshlets(&mesh);
+                info!("Meshlets: {}", meshlets.len());
                 let data = meshlets.iter().flat_map(Meshlet::bytes).collect::<Vec<_>>();
 
                 let mut meshlet_buffer = cendre

@@ -94,7 +94,9 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     }
 
-    if !model.mesh.normals.is_empty() {
+    if model.mesh.normals.is_empty() {
+        mesh.compute_flat_normals();
+    } else {
         let mut normals = vec![];
         for n in model.mesh.normals.chunks_exact(3) {
             let [n0, n1, n2] = n else { unreachable!(); };
@@ -156,7 +158,7 @@ fn optimize_mesh(
                 .entity(entity)
                 .insert(OptimizedMesh::from_bevy_mesh(mesh));
 
-            info!("obj mesh optimized {}ms", start.elapsed().as_millis(),);
+            info!("obj mesh generated {}ms", start.elapsed().as_millis());
         }
     }
 }

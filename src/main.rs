@@ -155,6 +155,8 @@ fn update(
         Option<&MeshletBuffer>,
         Option<&MeshletsCount>,
     )>,
+    mut frame_gpu_avg: Local<f64>,
+    mut frame_cpu_avg: Local<f64>,
 ) {
     let begin_frame = Instant::now();
 
@@ -262,13 +264,11 @@ fn update(
 
     // END
 
-    cendre.end_frame(image_index, command_buffer);
+    let (frame_gpu_begin, frame_gpu_end) = cendre.end_frame(image_index, command_buffer);
+    *frame_gpu_avg = *frame_gpu_avg * 0.95 + (frame_gpu_end - frame_gpu_begin) * 0.05;
+    *frame_cpu_avg = *frame_cpu_avg * 0.95 + (begin_frame.elapsed().as_secs_f64() * 1000.0) * 0.05;
 
-    window.title = format!(
-        "cpu: {:.3}ms gpu: {}ms",
-        begin_frame.elapsed().as_secs_f32() * 1000.0,
-        0.0
-    );
+    window.title = format!("cpu: {:.2}ms gpu: {:.2}ms", *frame_cpu_avg, *frame_gpu_avg,);
 }
 
 fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreInstance>) {
