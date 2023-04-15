@@ -9,7 +9,7 @@ use bytemuck::cast_slice;
 
 use crate::{
     instance::{Buffer, CendreInstance},
-    RTX,
+    RTXEnabled,
 };
 
 #[repr(C)]
@@ -204,6 +204,7 @@ pub fn prepare_mesh(
     mut commands: Commands,
     mut cendre: ResMut<CendreInstance>,
     mut meshes: Query<(Entity, &mut OptimizedMesh)>,
+    rtx_enabled: Res<RTXEnabled>,
 ) {
     for (entity, mut mesh) in &mut meshes {
         if !mesh.prepared {
@@ -257,7 +258,7 @@ pub fn prepare_mesh(
             index_buffer.write(&index_buffer_data);
             entity_cmd.insert(IndexBuffer(index_buffer));
 
-            if RTX {
+            if rtx_enabled.0 {
                 let meshlets = build_meshlets(&mesh);
                 info!("Meshlets: {}", meshlets.len());
                 let data = meshlets.iter().flat_map(Meshlet::bytes).collect::<Vec<_>>();

@@ -24,10 +24,14 @@ use cendre::obj_loader::{ObjBundle, ObjLoaderPlugin};
 use cendre::optimized_mesh::{
     prepare_mesh, IndexBuffer, MeshletBuffer, MeshletsCount, OptimizedMesh, VertexBuffer,
 };
-use cendre::RTX;
+use cendre::RTXEnabled;
+
+pub const RTX: bool = false;
+pub const OBJ_PATH: &str = "models/bunny.obj";
 
 fn main() {
     App::new()
+        .insert_resource(RTXEnabled(RTX))
         .add_plugins(MinimalPlugins)
         .add_plugin(WindowPlugin {
             primary_window: Some(Window {
@@ -49,9 +53,8 @@ fn main() {
         .add_system(exit_on_esc)
         // renderer
         .add_startup_system(init_cendre)
-        .add_system(resize.before(update))
-        .add_system(prepare_mesh.before(update))
-        .add_system(update)
+        .add_systems((resize, update).chain())
+        .add_system(prepare_mesh)
         .run();
 }
 
@@ -63,7 +66,7 @@ fn exit_on_esc(key_input: Res<Input<KeyCode>>, mut exit_events: EventWriter<AppE
 
 fn load_mesh(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(ObjBundle {
-        obj: asset_server.load("models/bunny.obj"),
+        obj: asset_server.load(OBJ_PATH),
     });
 }
 
@@ -75,13 +78,15 @@ fn init_cendre(
     windows: Query<Entity, With<Window>>,
     winit_windows: NonSendMut<WinitWindows>,
 ) {
+    info!("RTX: {}", if RTX { "ON" } else { "OFF" });
+
     let winit_window = windows
         .get_single()
         .ok()
         .and_then(|window_id| winit_windows.get_window(window_id))
         .expect("Failed to get winit window");
 
-    let mut cendre = CendreInstance::init(winit_window);
+    let mut cendre = CendreInstance::init(winit_window, RTX);
     info!("Instance created");
 
     let bindings = if RTX {
@@ -268,7 +273,12 @@ fn update(
     *frame_gpu_avg = *frame_gpu_avg * 0.95 + (frame_gpu_end - frame_gpu_begin) * 0.05;
     *frame_cpu_avg = *frame_cpu_avg * 0.95 + (begin_frame.elapsed().as_secs_f64() * 1000.0) * 0.05;
 
-    window.title = format!("cpu: {:.2}ms gpu: {:.2}ms", *frame_cpu_avg, *frame_gpu_avg,);
+    window.title = format!(
+        "cpu: {:.2}ms gpu: {:.2}ms RTX: {}",
+        *frame_cpu_avg,
+        *frame_gpu_avg,
+        if RTX { "ON" } else { "OFF" }
+    );
 }
 
 fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreInstance>) {

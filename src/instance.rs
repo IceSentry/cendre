@@ -23,8 +23,7 @@ use gpu_allocator::{
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 use crate::{
-    c_char_buf_to_string, image_barrier, shaders::load_vk_shader_module,
-    swapchain::CendreSwapchain, RTX,
+    c_char_buf_to_string, image_barrier, shaders::load_vk_shader_module, swapchain::CendreSwapchain,
 };
 
 pub struct Buffer {
@@ -146,7 +145,7 @@ pub struct CendreInstance {
 
 impl CendreInstance {
     #[allow(clippy::too_many_lines)]
-    pub fn init(winit_window: &winit::window::Window) -> Self {
+    pub fn init(winit_window: &winit::window::Window, use_rtx: bool) -> Self {
         let entry = Entry::linked();
         let instance =
             create_instance(&entry, "Cendre", winit_window).expect("Failed to create instance");
@@ -198,7 +197,7 @@ impl CendreInstance {
             .uniform_and_storage_buffer8_bit_access(true);
 
         let mut mesh_shader_features_nv =
-            vk::PhysicalDeviceMeshShaderFeaturesNV::default().mesh_shader(RTX);
+            vk::PhysicalDeviceMeshShaderFeaturesNV::default().mesh_shader(use_rtx);
 
         let device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_info))

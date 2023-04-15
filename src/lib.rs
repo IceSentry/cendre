@@ -21,7 +21,8 @@ use std::{borrow::Cow, ffi::CStr, os::raw::c_char};
 use ash::vk;
 use bevy::prelude::*;
 
-pub const RTX: bool = false;
+#[derive(Resource)]
+pub struct RTXEnabled(pub bool);
 
 fn image_barrier<'a>(
     image: vk::Image,
