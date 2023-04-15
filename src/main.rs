@@ -49,6 +49,7 @@ fn main() {
             ..default()
         })
         .add_plugin(ObjLoaderPlugin)
+        .add_asset::<Mesh>()
         .add_startup_system(load_mesh)
         .add_system(exit_on_esc)
         // renderer

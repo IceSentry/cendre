@@ -94,6 +94,32 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     }
 
+    // if !model.mesh.texcoords.is_empty() {
+    //     let mut uvs = vec![];
+    //     for uv in model.mesh.texcoords.chunks_exact(2) {
+    //         let [u, v] = uv else { unreachable!(); };
+    //         uvs.push([*u, *v]);
+    //     }
+    //     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    // }
+
+    // if !model.mesh.vertex_color.is_empty() {
+    //     let mut vertex_color = vec![];
+    //     for color in model.mesh.vertex_color.chunks_exact(3) {
+    //         let [r, g, b] = color else { unreachable!(); };
+    //         vertex_color.push([*r, *g, *b]);
+    //     }
+    //     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vertex_color);
+    // }
+
+    if !model.mesh.indices.is_empty() {
+        let mut indices = vec![];
+        for index in &model.mesh.indices {
+            indices.push(*index);
+        }
+        mesh.set_indices(Some(Indices::U32(indices)));
+    }
+
     if model.mesh.normals.is_empty() {
         mesh.compute_flat_normals();
     } else {
@@ -103,32 +129,6 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
             normals.push([*n0, *n1, *n2]);
         }
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-    }
-
-    if !model.mesh.texcoords.is_empty() {
-        let mut uvs = vec![];
-        for uv in model.mesh.texcoords.chunks_exact(2) {
-            let [u, v] = uv else { unreachable!(); };
-            uvs.push([*u, *v]);
-        }
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    }
-
-    if !model.mesh.vertex_color.is_empty() {
-        let mut vertex_color = vec![];
-        for color in model.mesh.vertex_color.chunks_exact(3) {
-            let [r, g, b] = color else { unreachable!(); };
-            vertex_color.push([*r, *g, *b]);
-        }
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vertex_color);
-    }
-
-    if !model.mesh.indices.is_empty() {
-        let mut indices = vec![];
-        for index in &model.mesh.indices {
-            indices.push(*index);
-        }
-        mesh.set_indices(Some(Indices::U32(indices)));
     }
 
     mesh
@@ -143,6 +143,7 @@ fn optimize_mesh(
     mut commands: Commands,
     query: Query<(Entity, &Handle<LoadedObj>), Without<OptimizedMesh>>,
     obj_assets: Res<Assets<LoadedObj>>,
+    mut mesh_assets: ResMut<Assets<Mesh>>,
 ) {
     for (entity, obj_handle) in query.iter() {
         if let Some(obj) = obj_assets.get(obj_handle) {
@@ -154,9 +155,11 @@ fn optimize_mesh(
             // This should probably just loop on every mesh and spawn child entity with the optimized meshes.
             // Or even just spawn child entities with `Mesh`es and optimize them in a separate system.
             let mesh = &meshes[0];
+            let handle = mesh_assets.add(mesh.clone());
             commands
                 .entity(entity)
-                .insert(OptimizedMesh::from_bevy_mesh(mesh));
+                .insert(OptimizedMesh::from_bevy_mesh(mesh))
+                .insert(handle);
 
             info!("obj mesh generated {}ms", start.elapsed().as_millis());
         }

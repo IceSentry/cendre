@@ -203,38 +203,40 @@ pub struct MeshletsCount(pub u32);
 pub fn prepare_mesh(
     mut commands: Commands,
     mut cendre: ResMut<CendreInstance>,
-    mut meshes: Query<(Entity, &mut OptimizedMesh)>,
+    mut meshes: Query<(Entity, &mut OptimizedMesh, &Handle<Mesh>)>,
     rtx_enabled: Res<RTXEnabled>,
+    mesh_assets: Res<Assets<Mesh>>,
 ) {
-    for (entity, mut mesh) in &mut meshes {
+    for (entity, mut mesh, mesh_handle) in &mut meshes {
         if !mesh.prepared {
             info!("preparing mesh");
             let start = Instant::now();
 
             // Bevy version
-            // let vertex_buffer_data = mesh.get_vertex_buffer_data();
-            // let index_buffer_data = mesh.get_index_buffer_bytes().unwrap().to_vec();
+            let mesh_asset = mesh_assets.get(mesh_handle).unwrap();
+            let vertex_buffer_data = mesh_asset.get_vertex_buffer_data();
+            let index_buffer_data = mesh_asset.get_index_buffer_bytes().unwrap().to_vec();
 
-            let (vertex_count, remap) = if let Some(indices) = mesh.indices.clone() {
-                info!("Triangles: {}", indices.len() / 3);
-                meshopt::generate_vertex_remap(&mesh.vertices, Some(&indices))
-            } else {
-                meshopt::generate_vertex_remap(&mesh.vertices, None)
-            };
+            // let (vertex_count, remap) = if let Some(indices) = mesh.indices.clone() {
+            //     info!("Triangles: {}", indices.len() / 3);
+            //     meshopt::generate_vertex_remap(&mesh.vertices, Some(&indices))
+            // } else {
+            //     meshopt::generate_vertex_remap(&mesh.vertices, None)
+            // };
 
-            let vertex_buffer_data =
-                meshopt::remap_vertex_buffer(&mesh.vertices, vertex_count, &remap)
-                    .iter()
-                    .flat_map(Vertex::bytes)
-                    .collect::<Vec<_>>();
-            let index_buffer_data = if let Some(indices) = mesh.indices.clone() {
-                meshopt::remap_index_buffer(Some(&indices), vertex_count, &remap)
-            } else {
-                meshopt::remap_index_buffer(None, vertex_count, &remap)
-            }
-            .iter()
-            .flat_map(|x| x.to_ne_bytes())
-            .collect::<Vec<_>>();
+            // let vertex_buffer_data =
+            //     meshopt::remap_vertex_buffer(&mesh.vertices, vertex_count, &remap)
+            //         .iter()
+            //         .flat_map(Vertex::bytes)
+            //         .collect::<Vec<_>>();
+            // let index_buffer_data = if let Some(indices) = mesh.indices.clone() {
+            //     meshopt::remap_index_buffer(Some(&indices), vertex_count, &remap)
+            // } else {
+            //     meshopt::remap_index_buffer(None, vertex_count, &remap)
+            // }
+            // .iter()
+            // .flat_map(|x| x.to_ne_bytes())
+            // .collect::<Vec<_>>();
 
             let mut entity_cmd = commands.entity(entity);
 
