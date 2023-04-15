@@ -19,7 +19,7 @@ bevy = { version = "0.10.1", default-features = false, features = [
     "bevy_render",
     "filesystem_watcher",
 ] }
-bytemuck = "1.13.1"
+bytemuck = { version = "1.13.1", features = ["derive"] }
 # gpu-allocator = "0.22.0"
 # Use a patched version that uses the git version of ash
 gpu-allocator = { path = "../gpu-allocator" }

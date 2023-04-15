@@ -13,21 +13,11 @@ use crate::{
 };
 
 #[repr(C)]
-#[derive(Copy, Clone, Default)]
+#[derive(Copy, Clone, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
     pub pos: [f32; 3],
-    pub norm: [u8; 4],
+    pub norm: [u8; 4], // u32
     pub uv: [f32; 2],
-}
-
-impl Vertex {
-    fn bytes(&self) -> Vec<u8> {
-        let mut data = vec![];
-        data.extend_from_slice(cast_slice(&self.pos));
-        data.extend_from_slice(&self.norm);
-        data.extend_from_slice(cast_slice(&self.uv));
-        data
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -91,8 +81,6 @@ impl OptimizedMesh {
                         .collect()
                 })
                 .unwrap();
-
-            // TODO comput normals if not exists
 
             let uvs = mesh
                 .attribute(Mesh::ATTRIBUTE_UV_0)
@@ -203,19 +191,16 @@ pub struct MeshletsCount(pub u32);
 pub fn prepare_mesh(
     mut commands: Commands,
     mut cendre: ResMut<CendreInstance>,
-    mut meshes: Query<(Entity, &mut OptimizedMesh, &Handle<Mesh>)>,
+    mut meshes: Query<(Entity, &mut OptimizedMesh)>,
     rtx_enabled: Res<RTXEnabled>,
-    mesh_assets: Res<Assets<Mesh>>,
 ) {
-    for (entity, mut mesh, mesh_handle) in &mut meshes {
+    for (entity, mut mesh) in &mut meshes {
         if !mesh.prepared {
             info!("preparing mesh");
             let start = Instant::now();
 
-            // Bevy version
-            let mesh_asset = mesh_assets.get(mesh_handle).unwrap();
-            let vertex_buffer_data = mesh_asset.get_vertex_buffer_data();
-            let index_buffer_data = mesh_asset.get_index_buffer_bytes().unwrap().to_vec();
+            let vertex_buffer_data = cast_slice(&mesh.vertices);
+            let index_buffer_data = cast_slice(mesh.indices.as_ref().unwrap());
 
             // let (vertex_count, remap) = if let Some(indices) = mesh.indices.clone() {
             //     info!("Triangles: {}", indices.len() / 3);
@@ -227,7 +212,7 @@ pub fn prepare_mesh(
             // let vertex_buffer_data =
             //     meshopt::remap_vertex_buffer(&mesh.vertices, vertex_count, &remap)
             //         .iter()
-            //         .flat_map(Vertex::bytes)
+            //         .flat_map(|v| bytemuck::bytes_of(v).to_vec())
             //         .collect::<Vec<_>>();
             // let index_buffer_data = if let Some(indices) = mesh.indices.clone() {
             //     meshopt::remap_index_buffer(Some(&indices), vertex_count, &remap)

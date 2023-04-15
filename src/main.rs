@@ -26,8 +26,8 @@ use cendre::optimized_mesh::{
 };
 use cendre::RTXEnabled;
 
-pub const RTX: bool = false;
-pub const OBJ_PATH: &str = "models/bunny.obj";
+pub const RTX: bool = true;
+pub const OBJ_PATH: &str = "models/hairball.obj";
 
 fn main() {
     App::new()

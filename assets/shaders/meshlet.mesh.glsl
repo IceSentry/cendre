@@ -10,10 +10,7 @@ layout(triangles, max_vertices = 64, max_primitives = 42) out;
 struct Vertex
 {
 	float vx, vy, vz;
-	uint8_t nx;
-    uint8_t ny;
-    uint8_t nz;
-    uint8_t nw;
+	uint8_t nx, ny, nz, nw;
 	float tu, tv;
 };
 
@@ -49,10 +46,9 @@ void main()
 		vec3 normal = vec3(int(vertices[vi].nx), int(vertices[vi].ny), int(vertices[vi].nz)) / 127.0 - 1.0;
 		vec2 texcoord = vec2(vertices[vi].tu, vertices[vi].tv);
 
-		vec3 offset = vec3(0.25, -0.75, 0.0);
+		vec3 offset = vec3(0.25, -0.75, 0.5);
 		// vec3 offset = vec3(0.0, 0.0, 0.5);
-
-		float scale = 1.0;
+		vec3 scale = vec3(1.0, 1.0, 0.5);
 
 		gl_MeshVerticesNV[i].gl_Position = vec4(position * scale + offset, 1.0);
 		color[i] = vec4(normal * 0.5 + vec3(0.5), 1.0);
