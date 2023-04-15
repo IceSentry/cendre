@@ -26,8 +26,8 @@ use cendre::optimized_mesh::{
 };
 use cendre::RTXEnabled;
 
-pub const RTX: bool = true;
-pub const OBJ_PATH: &str = "models/hairball.obj";
+pub const RTX: bool = false;
+pub const OBJ_PATH: &str = "models/buddha.obj";
 
 fn main() {
     App::new()
@@ -233,9 +233,11 @@ fn update(
                         0,
                         &descriptor_writes,
                     );
-                    cendre
-                        .mesh_shader
-                        .cmd_draw_mesh_tasks(command_buffer, meshlets_count.0, 0);
+                    for _ in 0..10 {
+                        cendre
+                            .mesh_shader
+                            .cmd_draw_mesh_tasks(command_buffer, meshlets_count.0, 0);
+                    }
                 }
             }
         } else {
@@ -257,7 +259,9 @@ fn update(
                     0,
                     vk::IndexType::UINT32,
                 );
-                device.cmd_draw_indexed(command_buffer, indices.len() as u32, 1, 0, 0, 0);
+                for _ in 0..10 {
+                    device.cmd_draw_indexed(command_buffer, indices.len() as u32, 1, 0, 0, 0);
+                }
             }
         }
     }

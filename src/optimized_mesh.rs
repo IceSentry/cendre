@@ -199,50 +199,64 @@ pub fn prepare_mesh(
             info!("preparing mesh");
             let start = Instant::now();
 
-            let vertex_buffer_data = cast_slice(&mesh.vertices);
-            let index_buffer_data = cast_slice(mesh.indices.as_ref().unwrap());
+            let Some(indices) = mesh.indices.as_ref() else { unimplemented!("Mesh require indices") };
+            info!("Triangles: {}", indices.len() / 3);
 
-            // let (vertex_count, remap) = if let Some(indices) = mesh.indices.clone() {
-            //     info!("Triangles: {}", indices.len() / 3);
-            //     meshopt::generate_vertex_remap(&mesh.vertices, Some(&indices))
-            // } else {
-            //     meshopt::generate_vertex_remap(&mesh.vertices, None)
-            // };
+            // let vertex_buffer_data = cast_slice(&mesh.vertices);
+            // let index_buffer_data = cast_slice(indices);
 
-            // let vertex_buffer_data =
-            //     meshopt::remap_vertex_buffer(&mesh.vertices, vertex_count, &remap)
-            //         .iter()
-            //         .flat_map(|v| bytemuck::bytes_of(v).to_vec())
-            //         .collect::<Vec<_>>();
-            // let index_buffer_data = if let Some(indices) = mesh.indices.clone() {
-            //     meshopt::remap_index_buffer(Some(&indices), vertex_count, &remap)
-            // } else {
-            //     meshopt::remap_index_buffer(None, vertex_count, &remap)
-            // }
-            // .iter()
-            // .flat_map(|x| x.to_ne_bytes())
-            // .collect::<Vec<_>>();
+            let (vertex_count, remap) =
+                meshopt::generate_vertex_remap(&mesh.vertices, Some(indices));
+
+            let vertex_buffer_data =
+                meshopt::remap_vertex_buffer(&mesh.vertices, vertex_count, &remap)
+                    .iter()
+                    .flat_map(|v| bytemuck::bytes_of(v).to_vec())
+                    .collect::<Vec<_>>();
+            let index_buffer_data =
+                meshopt::remap_index_buffer(Some(indices), vertex_count, &remap)
+                    .iter()
+                    .flat_map(|x| x.to_ne_bytes())
+                    .collect::<Vec<_>>();
 
             let mut entity_cmd = commands.entity(entity);
 
-            let mut vertex_buffer = cendre
+            let mut scratch_buffer = cendre
                 .create_buffer(
                     128 * 1024 * 1024,
-                    vk::BufferUsageFlags::STORAGE_BUFFER,
+                    vk::BufferUsageFlags::TRANSFER_SRC,
                     gpu_allocator::MemoryLocation::CpuToGpu,
                 )
                 .unwrap();
-            vertex_buffer.write(&vertex_buffer_data);
+
+            let vertex_buffer = cendre
+                .create_buffer(
+                    128 * 1024 * 1024,
+                    vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER,
+                    gpu_allocator::MemoryLocation::GpuOnly,
+                )
+                .unwrap();
+            cendre.updload_buffer(
+                cendre.command_buffers[0],
+                &mut scratch_buffer,
+                &vertex_buffer,
+                &vertex_buffer_data,
+            );
             entity_cmd.insert(VertexBuffer(vertex_buffer));
 
-            let mut index_buffer = cendre
+            let index_buffer = cendre
                 .create_buffer(
                     128 * 1024 * 1024,
-                    vk::BufferUsageFlags::INDEX_BUFFER,
-                    gpu_allocator::MemoryLocation::CpuToGpu,
+                    vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER,
+                    gpu_allocator::MemoryLocation::GpuOnly,
                 )
                 .unwrap();
-            index_buffer.write(&index_buffer_data);
+            cendre.updload_buffer(
+                cendre.command_buffers[0],
+                &mut scratch_buffer,
+                &index_buffer,
+                &index_buffer_data,
+            );
             entity_cmd.insert(IndexBuffer(index_buffer));
 
             if rtx_enabled.0 {
@@ -250,14 +264,19 @@ pub fn prepare_mesh(
                 info!("Meshlets: {}", meshlets.len());
                 let data = meshlets.iter().flat_map(Meshlet::bytes).collect::<Vec<_>>();
 
-                let mut meshlet_buffer = cendre
+                let meshlet_buffer = cendre
                     .create_buffer(
                         128 * 1024 * 1024,
-                        vk::BufferUsageFlags::STORAGE_BUFFER,
-                        gpu_allocator::MemoryLocation::CpuToGpu,
+                        vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER,
+                        gpu_allocator::MemoryLocation::GpuOnly,
                     )
                     .unwrap();
-                meshlet_buffer.write(&data);
+                cendre.updload_buffer(
+                    cendre.command_buffers[0],
+                    &mut scratch_buffer,
+                    &meshlet_buffer,
+                    &data,
+                );
                 entity_cmd.insert((
                     MeshletBuffer(meshlet_buffer),
                     MeshletsCount(meshlets.len() as u32),

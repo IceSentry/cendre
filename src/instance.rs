@@ -137,7 +137,7 @@ pub struct CendreInstance {
     pipelines: Vec<Arc<Mutex<vk::Pipeline>>>,
     descriptor_set_layouts: Vec<Arc<Mutex<vk::DescriptorSetLayout>>>,
     shader_modules: Vec<Arc<Mutex<vk::ShaderModule>>>,
-    allocator: Allocator,
+    allocator: std::mem::ManuallyDrop<Allocator>,
     allocations: Vec<Arc<Mutex<Option<Allocation>>>>,
     buffers: Vec<Arc<Mutex<vk::Buffer>>>,
     query_pool: vk::QueryPool,
@@ -299,7 +299,7 @@ impl CendreInstance {
             pipelines: vec![],
             descriptor_set_layouts: vec![],
             shader_modules: vec![],
-            allocator,
+            allocator: std::mem::ManuallyDrop::new(allocator),
             allocations: vec![],
             buffers: vec![],
             query_pool,
@@ -341,6 +341,76 @@ impl CendreInstance {
             allocation: allocation_raw,
             size,
         })
+    }
+
+    pub fn updload_buffer(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        scratch_buffer: &mut Buffer,
+        buffer: &Buffer,
+        data: &[u8],
+    ) {
+        assert!(scratch_buffer.size >= data.len() as u64);
+        scratch_buffer.write(data);
+
+        unsafe {
+            self.device
+                .reset_command_pool(self.command_pool, vk::CommandPoolResetFlags::empty())
+                .expect("Failed to reset command_pool");
+        }
+
+        unsafe {
+            let begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            self.device
+                .begin_command_buffer(command_buffer, &begin_info)
+                .unwrap();
+        }
+
+        let region = vk::BufferCopy::default()
+            .src_offset(0)
+            .dst_offset(0)
+            .size(data.len() as u64);
+        unsafe {
+            self.device.cmd_copy_buffer(
+                command_buffer,
+                scratch_buffer.vk_buffer(),
+                buffer.vk_buffer(),
+                std::slice::from_ref(&region),
+            );
+        }
+
+        unsafe {
+            let copy_barrier = vk::BufferMemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                .size(vk::WHOLE_SIZE)
+                .buffer(buffer.vk_buffer());
+            self.device.cmd_pipeline_barrier(
+                command_buffer,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::ALL_COMMANDS,
+                vk::DependencyFlags::BY_REGION,
+                &[],
+                &[copy_barrier],
+                &[],
+            );
+        }
+
+        unsafe {
+            self.device.end_command_buffer(command_buffer).unwrap();
+        }
+
+        unsafe {
+            let submits =
+                vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&command_buffer));
+            self.device
+                .queue_submit(self.present_queue, &[submits], vk::Fence::null())
+                .unwrap();
+            self.device.queue_wait_idle(self.present_queue).unwrap();
+        }
     }
 
     pub fn load_shader(
@@ -646,10 +716,13 @@ impl Drop for CendreInstance {
                 let buffer = buffer.lock().unwrap();
                 self.device.destroy_buffer(*buffer, None);
             }
+
             for allocation in &self.allocations {
                 let allocation = allocation.lock().unwrap().take().unwrap();
                 self.allocator.free(allocation).unwrap();
             }
+            // need to drop the allocator before the device gets destroyed
+            std::mem::ManuallyDrop::drop(&mut self.allocator);
 
             self.swapchain.destroy(&self.device, &self.swapchain_loader);
 
@@ -749,7 +822,7 @@ unsafe extern "system" fn vulkan_debug_callback(
     };
 
     let message_format =
-        format!("{message_type:?} [{message_id_name} ({message_id_number})] : {message}\n");
+        format!("{message_type:?} [{message_id_name} ({message_id_number})]:\n{message}\n");
     match message_severity {
         vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => trace!("{message_format}"),
         vk::DebugUtilsMessageSeverityFlagsEXT::INFO => info!("{message_format}"),
