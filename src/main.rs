@@ -119,13 +119,13 @@ fn init_cendre(
         )
     } else {
         cendre.load_shader(
-            "assets/shaders/triangle.vert.wgsl",
+            "assets/shaders/mesh.vert.wgsl",
             "vertex",
             vk::ShaderStageFlags::VERTEX,
         )
     };
     let fragment_shader = cendre.load_shader(
-        "assets/shaders/triangle.frag.wgsl",
+        "assets/shaders/mesh.frag.wgsl",
         "fragment",
         vk::ShaderStageFlags::FRAGMENT,
     );
