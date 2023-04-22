@@ -20,7 +20,8 @@ pub struct Vertex {
     pub uv: [f32; 2],
 }
 
-#[derive(Clone, Copy)]
+#[repr(C)]
+#[derive(Copy, Clone)]
 pub struct Meshlet {
     pub vertices: [u32; 64],
     pub indices: [u8; 126], // up to 42 triangles
@@ -120,14 +121,10 @@ fn as_float2(val: &VertexAttributeValues) -> Option<&[[f32; 2]]> {
 }
 
 #[allow(clippy::identity_op)]
-fn build_meshlets(mesh: &OptimizedMesh) -> Vec<Meshlet> {
+fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> Vec<Meshlet> {
     let mut meshlets = vec![];
     let mut meshlet = Meshlet::default();
-    let mut meshlet_vertices = vec![0xFF; mesh.vertices.len()];
-
-    let Some(indices) = mesh.indices.as_ref() else {
-        panic!("Meshlets require indices");
-    };
+    let mut meshlet_vertices = vec![0xFF; vertices.len()];
 
     for chunk in indices.chunks(3) {
         let [a, b, c] = chunk else { unreachable!() };
@@ -205,19 +202,18 @@ pub fn prepare_mesh(
             // let vertex_buffer_data = cast_slice(&mesh.vertices);
             // let index_buffer_data = cast_slice(indices);
 
+            // TODO do all meshopt calls in obj loader instead
             let (vertex_count, remap) =
                 meshopt::generate_vertex_remap(&mesh.vertices, Some(indices));
 
-            let vertex_buffer_data =
-                meshopt::remap_vertex_buffer(&mesh.vertices, vertex_count, &remap)
-                    .iter()
-                    .flat_map(|v| bytemuck::bytes_of(v).to_vec())
-                    .collect::<Vec<_>>();
-            let index_buffer_data =
-                meshopt::remap_index_buffer(Some(indices), vertex_count, &remap)
-                    .iter()
-                    .flat_map(|x| x.to_ne_bytes())
-                    .collect::<Vec<_>>();
+            let vertices = meshopt::remap_vertex_buffer(&mesh.vertices, vertex_count, &remap);
+            let indices = meshopt::remap_index_buffer(Some(indices), vertex_count, &remap);
+
+            let mut indices = meshopt::optimize_vertex_cache(&indices, vertices.len());
+            let vertices = meshopt::optimize_vertex_fetch(&mut indices, &vertices);
+
+            let vertex_buffer_data = cast_slice(&vertices);
+            let index_buffer_data = cast_slice(&indices);
 
             let mut entity_cmd = commands.entity(entity);
 
@@ -240,7 +236,7 @@ pub fn prepare_mesh(
                 cendre.command_buffers[0],
                 &mut scratch_buffer,
                 &vertex_buffer,
-                &vertex_buffer_data,
+                vertex_buffer_data,
             );
             entity_cmd.insert(VertexBuffer(vertex_buffer));
 
@@ -255,12 +251,12 @@ pub fn prepare_mesh(
                 cendre.command_buffers[0],
                 &mut scratch_buffer,
                 &index_buffer,
-                &index_buffer_data,
+                index_buffer_data,
             );
             entity_cmd.insert(IndexBuffer(index_buffer));
 
             if rtx_enabled.0 {
-                let meshlets = build_meshlets(&mesh);
+                let meshlets = build_meshlets(&vertices, &indices);
                 info!("Meshlets: {}", meshlets.len());
                 let data = meshlets.iter().flat_map(Meshlet::bytes).collect::<Vec<_>>();
 
