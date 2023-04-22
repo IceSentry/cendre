@@ -13,11 +13,78 @@ use crate::{
 };
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, bytemuck::Pod, bytemuck::Zeroable)]
+#[derive(Copy, Clone, Default, bytemuck::Pod, bytemuck::Zeroable, Debug)]
 pub struct Vertex {
     pub pos: [f32; 3],
     pub norm: [u8; 4], // u32
     pub uv: [f32; 2],
+}
+
+#[derive(Component, Debug, Clone)]
+pub struct OptimizedMesh {
+    pub vertices: Vec<Vertex>,
+    pub indices: Vec<u32>,
+    pub prepared: bool,
+}
+
+pub fn optimize_mesh(mesh: Mesh) -> OptimizedMesh {
+    let Some(Indices::U32(indices)) = mesh.indices().as_ref() else {
+        unimplemented!("Mesh require indices");
+    };
+    info!("Triangles: {}", indices.len() / 3);
+
+    let vertices = {
+        let pos = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .and_then(VertexAttributeValues::as_float3)
+            .unwrap();
+        let norms: Vec<_> = mesh
+            .attribute(Mesh::ATTRIBUTE_NORMAL)
+            .and_then(VertexAttributeValues::as_float3)
+            .map(|n| {
+                n.iter()
+                    .map(|n| {
+                        [
+                            (n[0] * 127.0 + 127.0) as u8,
+                            (n[1] * 127.0 + 127.0) as u8,
+                            (n[2] * 127.0 + 127.0) as u8,
+                            0,
+                        ]
+                    })
+                    .collect()
+            })
+            .unwrap();
+
+        let uvs = mesh
+            .attribute(Mesh::ATTRIBUTE_UV_0)
+            .and_then(as_float2)
+            .map(<[[f32; 2]]>::to_vec)
+            .unwrap_or(vec![[0.0, 0.0]; pos.len()]);
+
+        let mut vertices = vec![];
+        for (pos, (norm, uv)) in pos.iter().zip(norms.iter().zip(uvs.iter())) {
+            vertices.push(Vertex {
+                pos: *pos,
+                norm: *norm,
+                uv: *uv,
+            });
+        }
+        vertices
+    };
+
+    let (vertex_count, remap) = meshopt::generate_vertex_remap(&vertices, Some(indices));
+
+    let vertices = meshopt::remap_vertex_buffer(&vertices, vertex_count, &remap);
+    let indices = meshopt::remap_index_buffer(Some(indices), vertex_count, &remap);
+
+    let mut indices = meshopt::optimize_vertex_cache(&indices, vertices.len());
+    let vertices = meshopt::optimize_vertex_fetch(&mut indices, &vertices);
+
+    OptimizedMesh {
+        vertices,
+        indices,
+        prepared: false,
+    }
 }
 
 #[repr(C)]
@@ -49,67 +116,6 @@ impl Meshlet {
         data.push(self.index_count);
         data.push(self.vertex_count);
         data
-    }
-}
-
-#[derive(Component)]
-pub struct OptimizedMesh {
-    pub vertices: Vec<Vertex>,
-    pub indices: Option<Vec<u32>>,
-    pub prepared: bool,
-}
-
-impl OptimizedMesh {
-    pub fn from_bevy_mesh(mesh: &Mesh) -> OptimizedMesh {
-        let vertices = {
-            let pos = mesh
-                .attribute(Mesh::ATTRIBUTE_POSITION)
-                .and_then(VertexAttributeValues::as_float3)
-                .unwrap();
-            let norms: Vec<_> = mesh
-                .attribute(Mesh::ATTRIBUTE_NORMAL)
-                .and_then(VertexAttributeValues::as_float3)
-                .map(|n| {
-                    n.iter()
-                        .map(|n| {
-                            [
-                                (n[0] * 127.0 + 127.0) as u8,
-                                (n[1] * 127.0 + 127.0) as u8,
-                                (n[2] * 127.0 + 127.0) as u8,
-                                0,
-                            ]
-                        })
-                        .collect()
-                })
-                .unwrap();
-
-            let uvs = mesh
-                .attribute(Mesh::ATTRIBUTE_UV_0)
-                .and_then(as_float2)
-                .map(<[[f32; 2]]>::to_vec)
-                .unwrap_or(vec![[0.0, 0.0]; pos.len()]);
-
-            let mut vertices = vec![];
-            for (pos, (norm, uv)) in pos.iter().zip(norms.iter().zip(uvs.iter())) {
-                vertices.push(Vertex {
-                    pos: *pos,
-                    norm: *norm,
-                    uv: *uv,
-                });
-            }
-            vertices
-        };
-
-        let indices = mesh.indices().map(|indices| match indices {
-            Indices::U32(indices) => indices.clone(),
-            Indices::U16(_) => panic!("only u32 indices are supported"),
-        });
-
-        Self {
-            vertices,
-            indices,
-            prepared: false,
-        }
     }
 }
 
@@ -196,24 +202,8 @@ pub fn prepare_mesh(
             info!("preparing mesh");
             let start = Instant::now();
 
-            let Some(indices) = mesh.indices.as_ref() else { unimplemented!("Mesh require indices") };
-            info!("Triangles: {}", indices.len() / 3);
-
-            // let vertex_buffer_data = cast_slice(&mesh.vertices);
-            // let index_buffer_data = cast_slice(indices);
-
-            // TODO do all meshopt calls in obj loader instead
-            let (vertex_count, remap) =
-                meshopt::generate_vertex_remap(&mesh.vertices, Some(indices));
-
-            let vertices = meshopt::remap_vertex_buffer(&mesh.vertices, vertex_count, &remap);
-            let indices = meshopt::remap_index_buffer(Some(indices), vertex_count, &remap);
-
-            let mut indices = meshopt::optimize_vertex_cache(&indices, vertices.len());
-            let vertices = meshopt::optimize_vertex_fetch(&mut indices, &vertices);
-
-            let vertex_buffer_data = cast_slice(&vertices);
-            let index_buffer_data = cast_slice(&indices);
+            let vertex_buffer_data = cast_slice(&mesh.vertices);
+            let index_buffer_data = cast_slice(&mesh.indices);
 
             let mut entity_cmd = commands.entity(entity);
 
@@ -256,7 +246,7 @@ pub fn prepare_mesh(
             entity_cmd.insert(IndexBuffer(index_buffer));
 
             if rtx_enabled.0 {
-                let meshlets = build_meshlets(&vertices, &indices);
+                let meshlets = build_meshlets(&mesh.vertices, &mesh.indices);
                 info!("Meshlets: {}", meshlets.len());
                 let data = meshlets.iter().flat_map(Meshlet::bytes).collect::<Vec<_>>();
 
@@ -279,8 +269,8 @@ pub fn prepare_mesh(
                 ));
             }
 
-            info!("mesh prepared in {}ms", start.elapsed().as_millis());
             mesh.prepared = true;
+            info!("mesh prepared in {}ms", start.elapsed().as_millis());
         }
     }
 }

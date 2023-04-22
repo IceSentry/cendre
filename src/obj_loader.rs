@@ -11,12 +11,17 @@ use std::{
     time::Instant,
 };
 
-use crate::optimized_mesh::OptimizedMesh;
+use crate::optimized_mesh::{optimize_mesh, OptimizedMesh};
+
+#[derive(Default, Bundle)]
+pub struct ObjBundle {
+    pub obj: Handle<LoadedObj>,
+}
 
 #[derive(Debug, TypeUuid)]
 #[uuid = "39cadc56-aa9c-4543-8640-a018b74b5052"]
 pub struct LoadedObj {
-    pub meshes: Vec<Mesh>,
+    pub meshes: Vec<OptimizedMesh>,
 }
 
 pub struct ObjLoaderPlugin;
@@ -24,7 +29,7 @@ impl Plugin for ObjLoaderPlugin {
     fn build(&self, app: &mut App) {
         app.add_asset::<LoadedObj>()
             .init_asset_loader::<ObjLoader>()
-            .add_system(optimize_mesh);
+            .add_system(spawn_mesh);
     }
 }
 
@@ -77,7 +82,18 @@ pub async fn load_obj<'a, 'b>(
     .await
     .with_context(|| format!("Failed to load obj {:?}", load_context.path()))?;
 
-    let meshes = models.iter().map(generate_mesh).collect();
+    let start = Instant::now();
+
+    let meshes = models
+        .iter()
+        .map(generate_mesh)
+        .map(optimize_mesh)
+        .collect();
+
+    info!(
+        "mesh generated and optimized {}ms",
+        start.elapsed().as_millis()
+    );
 
     Ok(LoadedObj { meshes })
 }
@@ -134,31 +150,20 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     mesh
 }
 
-#[derive(Default, Bundle)]
-pub struct ObjBundle {
-    pub obj: Handle<LoadedObj>,
-}
-
-fn optimize_mesh(
+fn spawn_mesh(
     mut commands: Commands,
     query: Query<(Entity, &Handle<LoadedObj>), Without<OptimizedMesh>>,
     obj_assets: Res<Assets<LoadedObj>>,
 ) {
     for (entity, obj_handle) in query.iter() {
         if let Some(obj) = obj_assets.get(obj_handle) {
-            let start = Instant::now();
-
             let LoadedObj { meshes } = obj;
             // FIXME: this only uses the first mesh
             // complex models can have multiple meshes
             // This should probably just loop on every mesh and spawn child entity with the optimized meshes.
             // Or even just spawn child entities with `Mesh`es and optimize them in a separate system.
             let mesh = &meshes[0];
-            commands
-                .entity(entity)
-                .insert(OptimizedMesh::from_bevy_mesh(mesh));
-
-            info!("obj mesh generated {}ms", start.elapsed().as_millis());
+            commands.entity(entity).insert(mesh.clone());
         }
     }
 }

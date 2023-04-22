@@ -27,7 +27,7 @@ use cendre::optimized_mesh::{
 use cendre::RTXEnabled;
 
 pub const RTX: bool = true;
-pub const OBJ_PATH: &str = "models/buddha.obj";
+pub const OBJ_PATH: &str = "models/bunny.obj";
 
 fn main() {
     App::new()
@@ -213,7 +213,7 @@ fn update(
     }
 
     for (mesh, vb, ib, mb, meshlets_count) in &meshes {
-        let Some(indices) = &mesh.indices else { continue; };
+        let indices = &mesh.indices;
 
         let vertex_buffer_info = vb.descriptor_info(0);
         if RTX {
