@@ -4,12 +4,12 @@
 #extension GL_EXT_shader_8bit_storage: require
 #extension GL_NV_mesh_shader: require
 
-layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-layout(triangles, max_vertices = 64, max_primitives = 42) out;
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+layout(triangles, max_vertices = 64, max_primitives = 126) out;
 
 struct Vertex
 {
-	float vx, vy, vz;
+	float vx, vy, vz, vw;
 	uint8_t nx, ny, nz, nw;
 	float tu, tv;
 };
@@ -22,8 +22,8 @@ layout(binding = 0) readonly buffer Vertices
 struct Meshlet
 {
 	uint vertices[64];
-	uint8_t indices[126]; // up to 42 triangles
-	uint8_t indexCount;
+	uint8_t indices[126*3];
+	uint8_t triangleCount;
 	uint8_t vertexCount;
 };
 
@@ -37,8 +37,10 @@ layout(location = 0) out vec4 color[];
 void main()
 {
 	uint mi = gl_WorkGroupID.x;
+	uint ti = gl_LocalInvocationID.x; // thread index
 
-	for (uint i = 0; i < uint(meshlets[mi].vertexCount); ++i)
+	uint vertexCount = uint(meshlets[mi].vertexCount);
+	for (uint i = ti; i < vertexCount; i += 32)
 	{
 		uint vi = meshlets[mi].vertices[i]; // vertex index
 
@@ -48,16 +50,20 @@ void main()
 
 		vec3 offset = vec3(0.25, -0.75, 0.5);
 		// vec3 offset = vec3(0.0, 0.0, 0.5);
-		vec3 scale = vec3(1.0, 1.0, 0.5);
+		// vec3 scale = vec3(1.0, 1.0, 0.5);
+		vec3 scale = vec3(0.01);
 
 		gl_MeshVerticesNV[i].gl_Position = vec4(position * scale + offset, 1.0);
 		color[i] = vec4(normal * 0.5 + vec3(0.5), 1.0);
 	}
 
-    gl_PrimitiveCountNV = uint(meshlets[mi].indexCount) / 3;
-
-	for (uint i = 0; i < uint(meshlets[mi].indexCount); ++i)
+	uint indexCount = uint(meshlets[mi].triangleCount) * 3;
+	for (uint i = ti; i < indexCount; i += 32)
 	{
 		gl_PrimitiveIndicesNV[i] = uint(meshlets[mi].indices[i]);
+	}
+
+	if (ti == 0) {
+    	gl_PrimitiveCountNV = uint(meshlets[mi].triangleCount);
 	}
 }

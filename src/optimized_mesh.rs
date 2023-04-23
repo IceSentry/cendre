@@ -12,10 +12,12 @@ use crate::{
     RTXEnabled,
 };
 
+const TRIANGLE_COUNT: usize = 126;
+
 #[repr(C)]
 #[derive(Copy, Clone, Default, bytemuck::Pod, bytemuck::Zeroable, Debug)]
 pub struct Vertex {
-    pub pos: [f32; 3],
+    pub pos: [f32; 4],
     pub norm: [u8; 4], // u32
     pub uv: [f32; 2],
 }
@@ -64,7 +66,7 @@ pub fn optimize_mesh(mesh: Mesh) -> OptimizedMesh {
         let mut vertices = vec![];
         for (pos, (norm, uv)) in pos.iter().zip(norms.iter().zip(uvs.iter())) {
             vertices.push(Vertex {
-                pos: *pos,
+                pos: [pos[0], pos[1], pos[2], 0.0],
                 norm: *norm,
                 uv: *uv,
             });
@@ -91,8 +93,8 @@ pub fn optimize_mesh(mesh: Mesh) -> OptimizedMesh {
 #[derive(Copy, Clone)]
 pub struct Meshlet {
     pub vertices: [u32; 64],
-    pub indices: [u8; 126], // up to 42 triangles
-    pub index_count: u8,
+    pub indices: [u8; TRIANGLE_COUNT * 3],
+    pub triangle_count: u8,
     pub vertex_count: u8,
 }
 
@@ -100,8 +102,8 @@ impl Default for Meshlet {
     fn default() -> Self {
         Self {
             vertices: [0; 64],
-            indices: [0; 126],
-            index_count: 0,
+            indices: [0; TRIANGLE_COUNT * 3],
+            triangle_count: 0,
             vertex_count: 0,
         }
     }
@@ -113,7 +115,7 @@ impl Meshlet {
         let mut data = vec![];
         data.extend_from_slice(cast_slice(&self.vertices));
         data.extend_from_slice(cast_slice(&self.indices));
-        data.push(self.index_count);
+        data.push(self.triangle_count);
         data.push(self.vertex_count);
         data
     }
@@ -139,7 +141,7 @@ fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> Vec<Meshlet> {
             + u8::from(meshlet_vertices[*b as usize] == 0xFF)
             + u8::from(meshlet_vertices[*c as usize] == 0xFF)
             > 64
-            || meshlet.index_count + 3 > 126
+            || meshlet.triangle_count >= TRIANGLE_COUNT as u8
         {
             meshlets.push(meshlet);
             for i in 0..meshlet.vertex_count {
@@ -165,15 +167,14 @@ fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> Vec<Meshlet> {
             meshlet.vertex_count += 1;
         }
 
-        meshlet.indices[meshlet.index_count as usize] = meshlet_vertices[*a as usize];
-        meshlet.index_count += 1;
-        meshlet.indices[meshlet.index_count as usize] = meshlet_vertices[*b as usize];
-        meshlet.index_count += 1;
-        meshlet.indices[meshlet.index_count as usize] = meshlet_vertices[*c as usize];
-        meshlet.index_count += 1;
+        let index = meshlet.triangle_count as usize * 3;
+        meshlet.indices[index + 0] = meshlet_vertices[*a as usize];
+        meshlet.indices[index + 1] = meshlet_vertices[*b as usize];
+        meshlet.indices[index + 2] = meshlet_vertices[*c as usize];
+        meshlet.triangle_count += 1;
     }
 
-    if meshlet.index_count > 1 {
+    if meshlet.triangle_count > 1 {
         meshlets.push(meshlet);
     }
 
@@ -190,7 +191,6 @@ pub struct MeshletBuffer(pub Buffer);
 #[derive(Component)]
 pub struct MeshletsCount(pub u32);
 
-// TODO async
 pub fn prepare_mesh(
     mut commands: Commands,
     mut cendre: ResMut<CendreInstance>,
@@ -246,6 +246,7 @@ pub fn prepare_mesh(
             entity_cmd.insert(IndexBuffer(index_buffer));
 
             if rtx_enabled.0 {
+                // TODO build meshlets on load
                 let meshlets = build_meshlets(&mesh.vertices, &mesh.indices);
                 info!("Meshlets: {}", meshlets.len());
                 let data = meshlets.iter().flat_map(Meshlet::bytes).collect::<Vec<_>>();

@@ -137,6 +137,7 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     }
 
     if model.mesh.normals.is_empty() {
+        mesh.duplicate_vertices();
         mesh.compute_flat_normals();
     } else {
         let mut normals = vec![];
