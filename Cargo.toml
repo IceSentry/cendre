@@ -3,16 +3,19 @@ name = "cendre"
 version = "0.1.0"
 edition = "2021"
 
+[profile.dev]
+opt-level = 1
+
 [profile.dev.package."*"]
 opt-level = 3
 
 [dependencies]
 anyhow = "1.0.70"
-ash = { git = "https://github.com/ash-rs/ash.git", rev = "77e614d7766b17ef06c441ad28b419fed1329d07", features = [
+ash = { git = "https://github.com/ash-rs/ash.git", rev = "53c395b6b6603faa5cc68d472f8d991f1e3fa126", features = [
     "linked",
     "debug",
 ] }
-ash-window = { git = "https://github.com/ash-rs/ash.git", rev = "77e614d7766b17ef06c441ad28b419fed1329d07" }
+ash-window = { git = "https://github.com/ash-rs/ash.git", rev = "53c395b6b6603faa5cc68d472f8d991f1e3fa126" }
 bevy = { version = "0.10.1", default-features = false, features = [
     "bevy_winit",
     "bevy_asset",
@@ -26,7 +29,7 @@ gpu-allocator = { path = "../gpu-allocator" }
 meshopt = "0.1.9"
 raw-window-handle = "0.5.2"
 shaderc = "0.8.2"
-tobj = { version = "3.2.5", features = ["async"] }
+tobj = { version = "4.0.0", features = ["async"] }
 winit = "0.28.3"
 
 # Use a custom version of naga with mesh shader hacked in

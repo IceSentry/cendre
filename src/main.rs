@@ -26,12 +26,11 @@ use cendre::optimized_mesh::{
 };
 use cendre::RTXEnabled;
 
-pub const RTX: bool = true;
 pub const OBJ_PATH: &str = "models/bunny.obj";
 
 fn main() {
     App::new()
-        .insert_resource(RTXEnabled(RTX))
+        .insert_resource(RTXEnabled(false))
         .add_plugins(MinimalPlugins)
         .add_plugin(WindowPlugin {
             primary_window: Some(Window {
@@ -56,6 +55,7 @@ fn main() {
         .add_startup_system(init_cendre)
         .add_systems((resize, update).chain())
         .add_system(prepare_mesh)
+        .add_system(toggle_rtx)
         .run();
 }
 
@@ -73,63 +73,78 @@ fn load_mesh(mut commands: Commands, asset_server: Res<AssetServer>) {
 
 #[derive(Resource)]
 pub struct CendrePipeline(pub Pipeline);
+#[derive(Resource)]
+pub struct CendrePipelineRTX(pub Pipeline);
 
 fn init_cendre(
     mut commands: Commands,
     windows: Query<Entity, With<Window>>,
     winit_windows: NonSendMut<WinitWindows>,
 ) {
-    info!("RTX: {}", if RTX { "ON" } else { "OFF" });
-
     let winit_window = windows
         .get_single()
         .ok()
         .and_then(|window_id| winit_windows.get_window(window_id))
         .expect("Failed to get winit window");
 
-    let mut cendre = CendreInstance::init(winit_window, RTX);
+    let mut cendre = CendreInstance::init(winit_window);
     info!("Instance created");
 
-    let bindings = if RTX {
-        vec![
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(0)
-                .descriptor_count(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .stage_flags(vk::ShaderStageFlags::MESH_NV),
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(1)
-                .descriptor_count(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .stage_flags(vk::ShaderStageFlags::MESH_NV),
-        ]
-    } else {
-        vec![vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .stage_flags(vk::ShaderStageFlags::VERTEX)]
-    };
-    let pipeline_layout = cendre.create_pipeline_layout(&bindings).unwrap();
-
-    let vertex_shader = if RTX {
-        cendre.load_shader(
-            "assets/shaders/meshlet.mesh.glsl",
-            "main",
-            vk::ShaderStageFlags::MESH_NV,
-        )
-    } else {
-        cendre.load_shader(
-            "assets/shaders/mesh.vert.wgsl",
-            "vertex",
-            vk::ShaderStageFlags::VERTEX,
-        )
-    };
+    let vertex_shader = cendre.load_shader(
+        "assets/shaders/mesh.vert.wgsl",
+        "vertex",
+        vk::ShaderStageFlags::VERTEX,
+    );
     let fragment_shader = cendre.load_shader(
         "assets/shaders/mesh.frag.wgsl",
         "fragment",
         vk::ShaderStageFlags::FRAGMENT,
     );
+
+    if cendre.rtx_supported {
+        let mesh_shader = cendre.load_shader(
+            "assets/shaders/meshlet.mesh.glsl",
+            "main",
+            vk::ShaderStageFlags::MESH_NV,
+        );
+        let pipeline_layout = cendre
+            .create_pipeline_layout(&[
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(0)
+                    .descriptor_count(1)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .stage_flags(vk::ShaderStageFlags::MESH_NV),
+                vk::DescriptorSetLayoutBinding::default()
+                    .binding(1)
+                    .descriptor_count(1)
+                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                    .stage_flags(vk::ShaderStageFlags::MESH_NV),
+            ])
+            .unwrap();
+        let pipeline = cendre
+            .create_graphics_pipeline(
+                pipeline_layout,
+                cendre.render_pass,
+                &[mesh_shader.create_info(), fragment_shader.create_info()],
+                vk::PrimitiveTopology::TRIANGLE_LIST,
+                vk::PipelineRasterizationStateCreateInfo::default()
+                    .polygon_mode(vk::PolygonMode::FILL)
+                    .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+                    .cull_mode(vk::CullModeFlags::BACK)
+                    .line_width(1.0),
+            )
+            .expect("Failed to create graphics pipeline RTX");
+        commands.insert_resource(CendrePipelineRTX(pipeline));
+    }
+
+    let pipeline_layout = cendre
+        .create_pipeline_layout(&[vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::VERTEX)])
+        .unwrap();
+
     let pipeline = cendre
         .create_graphics_pipeline(
             pipeline_layout,
@@ -153,6 +168,7 @@ fn init_cendre(
 fn update(
     cendre: Res<CendreInstance>,
     cendre_pipeline: Res<CendrePipeline>,
+    cendre_pipeline_rtx: Option<Res<CendrePipelineRTX>>,
     mut windows: Query<&mut Window>,
     meshes: Query<(
         &OptimizedMesh,
@@ -163,13 +179,13 @@ fn update(
     )>,
     mut frame_gpu_avg: Local<f64>,
     mut frame_cpu_avg: Local<f64>,
+    rtx_enabled: Res<RTXEnabled>,
 ) {
     let begin_frame = Instant::now();
 
     let mut window = windows.single_mut();
 
     let device = &cendre.device;
-    let pipeline = &cendre_pipeline.0;
 
     // BEGIN
 
@@ -204,6 +220,11 @@ fn update(
     let height = window.physical_height();
     cendre.set_viewport(command_buffer, width, height);
 
+    let pipeline = if rtx_enabled.0 {
+        &cendre_pipeline_rtx.as_ref().unwrap().0
+    } else {
+        &cendre_pipeline.0
+    };
     unsafe {
         device.cmd_bind_pipeline(
             command_buffer,
@@ -212,11 +233,13 @@ fn update(
         );
     }
 
+    let draw_count = 2000;
+
     for (mesh, vb, ib, mb, meshlets_count) in &meshes {
         let indices = &mesh.indices;
 
         let vertex_buffer_info = vb.descriptor_info(0);
-        if RTX {
+        if rtx_enabled.0 {
             if let Some(mb) = mb {
                 let Some(meshlets_count) = &meshlets_count else { continue; };
 
@@ -233,7 +256,7 @@ fn update(
                         0,
                         &descriptor_writes,
                     );
-                    for _ in 0..10 {
+                    for _ in 0..draw_count {
                         cendre
                             .mesh_shader
                             .cmd_draw_mesh_tasks(command_buffer, meshlets_count.0, 0);
@@ -259,7 +282,7 @@ fn update(
                     0,
                     vk::IndexType::UINT32,
                 );
-                for _ in 0..10 {
+                for _ in 0..draw_count {
                     device.cmd_draw_indexed(command_buffer, indices.len() as u32, 1, 0, 0, 0);
                 }
             }
@@ -282,7 +305,7 @@ fn update(
         "cpu: {:.2}ms gpu: {:.2}ms RTX: {}",
         *frame_cpu_avg,
         *frame_gpu_avg,
-        if RTX { "ON" } else { "OFF" }
+        if rtx_enabled.0 { "ON" } else { "OFF" }
     );
 }
 
@@ -316,4 +339,10 @@ fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreInsta
         new_height,
         cendre.render_pass,
     );
+}
+
+fn toggle_rtx(mut rtx_enabled: ResMut<RTXEnabled>, key_input: Res<Input<KeyCode>>) {
+    if key_input.just_pressed(KeyCode::R) {
+        rtx_enabled.0 = !rtx_enabled.0;
+    }
 }

@@ -7,10 +7,7 @@ use bevy::{
 };
 use bytemuck::cast_slice;
 
-use crate::{
-    instance::{Buffer, CendreInstance},
-    RTXEnabled,
-};
+use crate::instance::{Buffer, CendreInstance};
 
 const TRIANGLE_COUNT: usize = 126;
 
@@ -195,7 +192,6 @@ pub fn prepare_mesh(
     mut commands: Commands,
     mut cendre: ResMut<CendreInstance>,
     mut meshes: Query<(Entity, &mut OptimizedMesh)>,
-    rtx_enabled: Res<RTXEnabled>,
 ) {
     for (entity, mut mesh) in &mut meshes {
         if !mesh.prepared {
@@ -245,7 +241,7 @@ pub fn prepare_mesh(
             );
             entity_cmd.insert(IndexBuffer(index_buffer));
 
-            if rtx_enabled.0 {
+            if cendre.rtx_supported {
                 // TODO build meshlets on load
                 let meshlets = build_meshlets(&mesh.vertices, &mesh.indices);
                 info!("Meshlets: {}", meshlets.len());

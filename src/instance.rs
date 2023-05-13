@@ -141,11 +141,12 @@ pub struct CendreInstance {
     allocations: Vec<Arc<Mutex<Option<Allocation>>>>,
     buffers: Vec<Arc<Mutex<vk::Buffer>>>,
     query_pool: vk::QueryPool,
+    pub rtx_supported: bool,
 }
 
 impl CendreInstance {
     #[allow(clippy::too_many_lines)]
-    pub fn init(winit_window: &winit::window::Window, use_rtx: bool) -> Self {
+    pub fn init(winit_window: &winit::window::Window) -> Self {
         let entry = Entry::linked();
         let instance =
             create_instance(&entry, "Cendre", winit_window).expect("Failed to create instance");
@@ -169,6 +170,22 @@ impl CendreInstance {
         let (physical_device, queue_family_index) =
             select_physical_device(&instance, &surface_loader, surface).expect("No GPU found");
 
+        let extension_properties = unsafe {
+            instance
+                .enumerate_device_extension_properties(physical_device)
+                .unwrap()
+        };
+
+        let mut rtx_supported = false;
+        if extension_properties
+            .iter()
+            .map(|x| unsafe { CStr::from_ptr(x.extension_name.as_ptr()) })
+            .any(|ext_name| ext_name == MeshShader::NAME)
+        {
+            info!("RTX supported");
+            rtx_supported = true;
+        }
+
         let props = unsafe { instance.get_physical_device_properties(physical_device) };
         assert!(props.limits.timestamp_compute_and_graphics == 1);
 
@@ -176,13 +193,15 @@ impl CendreInstance {
             .queue_family_index(queue_family_index as u32)
             .queue_priorities(&[1.0]);
 
-        let extension_names = [
+        let mut extension_names = vec![
             Swapchain::NAME.as_ptr(),
             PushDescriptor::NAME.as_ptr(),
-            MeshShader::NAME.as_ptr(),
             unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_KHR_16bit_storage\0").as_ptr() },
             unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_KHR_8bit_storage\0").as_ptr() },
         ];
+        if rtx_supported {
+            extension_names.push(MeshShader::NAME.as_ptr());
+        }
 
         let mut features2 = vk::PhysicalDeviceFeatures2::default();
 
@@ -196,17 +215,19 @@ impl CendreInstance {
             .storage_buffer8_bit_access(true)
             .uniform_and_storage_buffer8_bit_access(true);
 
-        let mut mesh_shader_features_nv =
-            vk::PhysicalDeviceMeshShaderFeaturesNV::default().mesh_shader(use_rtx);
-
-        let device_create_info = vk::DeviceCreateInfo::default()
+        let mut device_create_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(std::slice::from_ref(&queue_info))
             .enabled_extension_names(&extension_names)
             .push_next(&mut features2)
             .push_next(&mut physical_device_buffer_device_address_features)
             .push_next(&mut features_16bit_storage)
-            .push_next(&mut features_8bit_storage)
-            .push_next(&mut mesh_shader_features_nv);
+            .push_next(&mut features_8bit_storage);
+
+        let mut mesh_shader_features_nv =
+            vk::PhysicalDeviceMeshShaderFeaturesNV::default().mesh_shader(true);
+        if rtx_supported {
+            device_create_info = device_create_info.push_next(&mut mesh_shader_features_nv);
+        }
 
         let device = unsafe {
             instance
@@ -303,6 +324,7 @@ impl CendreInstance {
             allocations: vec![],
             buffers: vec![],
             query_pool,
+            rtx_supported,
         }
     }
 
