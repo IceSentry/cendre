@@ -26,7 +26,7 @@ use cendre::optimized_mesh::{
 };
 use cendre::RTXEnabled;
 
-pub const RTX: bool = false;
+pub const RTX: bool = true;
 pub const OBJ_PATH: &str = "models/bunny.obj";
 
 fn main() {
