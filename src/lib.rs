@@ -11,8 +11,8 @@
 #![allow(clippy::type_complexity)]
 
 pub mod instance;
+pub mod mesh;
 pub mod obj_loader;
-pub mod optimized_mesh;
 pub mod shaders;
 pub mod swapchain;
 

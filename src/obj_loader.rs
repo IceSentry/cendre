@@ -10,7 +10,7 @@ use std::{
     time::Instant,
 };
 
-use crate::optimized_mesh::{optimize_mesh, Mesh, Vertex};
+use crate::mesh::{optimize_mesh, Mesh, Vertex};
 
 #[derive(Default, Bundle)]
 pub struct ObjBundle {

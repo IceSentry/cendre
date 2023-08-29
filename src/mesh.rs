@@ -138,12 +138,15 @@ pub struct MeshletBuffer(pub Buffer);
 #[derive(Component)]
 pub struct MeshletsCount(pub u32);
 
+#[derive(Component)]
+pub struct PreparedMesh;
+
 pub fn prepare_mesh(
     mut commands: Commands,
     mut cendre: ResMut<CendreInstance>,
-    mut meshes: Query<(Entity, &mut Mesh)>,
+    meshes: Query<(Entity, &Mesh), Without<PreparedMesh>>,
 ) {
-    for (entity, mut mesh) in &mut meshes {
+    for (entity, mesh) in &meshes {
         if !mesh.prepared {
             info!("preparing mesh");
             let start = Instant::now();
@@ -216,7 +219,7 @@ pub fn prepare_mesh(
                 ));
             }
 
-            mesh.prepared = true;
+            entity_cmd.insert(PreparedMesh);
             info!("mesh prepared in {}ms", start.elapsed().as_millis());
         }
     }

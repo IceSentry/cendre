@@ -25,8 +25,8 @@ use bevy::{
 };
 use cendre::{
     instance::{CendreInstance, Pipeline},
+    mesh::{prepare_mesh, IndexBuffer, Mesh, MeshletBuffer, MeshletsCount, VertexBuffer},
     obj_loader::{ObjBundle, ObjLoaderPlugin},
-    optimized_mesh::{prepare_mesh, IndexBuffer, Mesh, MeshletBuffer, MeshletsCount, VertexBuffer},
     RTXEnabled,
 };
 
