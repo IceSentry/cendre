@@ -1,10 +1,7 @@
 use std::time::Instant;
 
 use ash::vk;
-use bevy::{
-    prelude::*,
-    render::mesh::{Indices, VertexAttributeValues},
-};
+use bevy::prelude::*;
 use bytemuck::cast_slice;
 
 use crate::instance::{Buffer, CendreInstance};
@@ -22,66 +19,24 @@ pub struct Vertex {
 unsafe impl bytemuck::Pod for Vertex {}
 
 #[derive(Component, Debug, Clone)]
-pub struct OptimizedMesh {
+pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
     pub prepared: bool,
 }
 
-pub fn optimize_mesh(mesh: Mesh) -> OptimizedMesh {
-    let Some(Indices::U32(indices)) = mesh.indices().as_ref() else {
-        unimplemented!("Mesh require indices");
-    };
+pub fn optimize_mesh(vertices: &[Vertex], indices: &[u32]) -> Mesh {
     info!("Triangles: {}", indices.len() / 3);
 
-    let vertices = {
-        let pos = mesh
-            .attribute(Mesh::ATTRIBUTE_POSITION)
-            .and_then(VertexAttributeValues::as_float3)
-            .unwrap();
-        let norms: Vec<_> = mesh
-            .attribute(Mesh::ATTRIBUTE_NORMAL)
-            .and_then(VertexAttributeValues::as_float3)
-            .map(|n| {
-                n.iter()
-                    .map(|n| {
-                        [
-                            (n[0] * 127.0 + 127.0) as u8,
-                            (n[1] * 127.0 + 127.0) as u8,
-                            (n[2] * 127.0 + 127.0) as u8,
-                            0,
-                        ]
-                    })
-                    .collect()
-            })
-            .unwrap();
+    let (vertex_count, remap) = meshopt::generate_vertex_remap(vertices, Some(indices));
 
-        let uvs = mesh
-            .attribute(Mesh::ATTRIBUTE_UV_0)
-            .and_then(as_float2)
-            .map(<[[f32; 2]]>::to_vec)
-            .unwrap_or(vec![[0.0, 0.0]; pos.len()]);
-
-        let mut vertices = vec![];
-        for (pos, (norm, uv)) in pos.iter().zip(norms.iter().zip(uvs.iter())) {
-            vertices.push(Vertex {
-                pos: [pos[0], pos[1], pos[2], 0.0],
-                norm: *norm,
-                uv: *uv,
-            });
-        }
-        vertices
-    };
-
-    let (vertex_count, remap) = meshopt::generate_vertex_remap(&vertices, Some(indices));
-
-    let vertices = meshopt::remap_vertex_buffer(&vertices, vertex_count, &remap);
+    let vertices = meshopt::remap_vertex_buffer(vertices, vertex_count, &remap);
     let indices = meshopt::remap_index_buffer(Some(indices), vertex_count, &remap);
 
     let mut indices = meshopt::optimize_vertex_cache(&indices, vertices.len());
     let vertices = meshopt::optimize_vertex_fetch(&mut indices, &vertices);
 
-    OptimizedMesh {
+    Mesh {
         vertices,
         indices,
         prepared: false,
@@ -117,13 +72,6 @@ impl Meshlet {
         data.push(self.triangle_count);
         data.push(self.vertex_count);
         data
-    }
-}
-
-fn as_float2(val: &VertexAttributeValues) -> Option<&[[f32; 2]]> {
-    match val {
-        VertexAttributeValues::Float32x2(values) => Some(values),
-        _ => None,
     }
 }
 
@@ -193,7 +141,7 @@ pub struct MeshletsCount(pub u32);
 pub fn prepare_mesh(
     mut commands: Commands,
     mut cendre: ResMut<CendreInstance>,
-    mut meshes: Query<(Entity, &mut OptimizedMesh)>,
+    mut meshes: Query<(Entity, &mut Mesh)>,
 ) {
     for (entity, mut mesh) in &mut meshes {
         if !mesh.prepared {

@@ -26,9 +26,7 @@ use bevy::{
 use cendre::{
     instance::{CendreInstance, Pipeline},
     obj_loader::{ObjBundle, ObjLoaderPlugin},
-    optimized_mesh::{
-        prepare_mesh, IndexBuffer, MeshletBuffer, MeshletsCount, OptimizedMesh, VertexBuffer,
-    },
+    optimized_mesh::{prepare_mesh, IndexBuffer, Mesh, MeshletBuffer, MeshletsCount, VertexBuffer},
     RTXEnabled,
 };
 
@@ -56,7 +54,6 @@ fn main() {
             },
             ObjLoaderPlugin,
         ))
-        .add_asset::<Mesh>()
         .add_systems(Startup, (init_cendre, load_mesh))
         .add_systems(Update, (resize, update).chain())
         .add_systems(Update, (prepare_mesh, toggle_rtx, exit_on_esc))
@@ -175,7 +172,7 @@ fn update(
     cendre_pipeline_rtx: Option<Res<CendrePipelineRTX>>,
     mut windows: Query<&mut Window>,
     meshes: Query<(
-        &OptimizedMesh,
+        &Mesh,
         &VertexBuffer,
         &IndexBuffer,
         Option<&MeshletBuffer>,

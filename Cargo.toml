@@ -19,7 +19,6 @@ ash-window = { git = "https://github.com/ash-rs/ash", rev = "0652aee" }
 bevy = { version = "0.11", default-features = false, features = [
     "bevy_winit",
     "bevy_asset",
-    "bevy_render",
     "filesystem_watcher",
 ] }
 bytemuck = { version = "1.13.1", features = ["derive"] }

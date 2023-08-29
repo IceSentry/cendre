@@ -3,7 +3,6 @@ use bevy::{
     asset::{AssetLoader, LoadContext, LoadedAsset},
     prelude::*,
     reflect::{TypePath, TypeUuid},
-    render::{mesh::Indices, render_resource::PrimitiveTopology},
     utils::BoxedFuture,
 };
 use std::{
@@ -11,7 +10,7 @@ use std::{
     time::Instant,
 };
 
-use crate::optimized_mesh::{optimize_mesh, OptimizedMesh};
+use crate::optimized_mesh::{optimize_mesh, Mesh, Vertex};
 
 #[derive(Default, Bundle)]
 pub struct ObjBundle {
@@ -21,7 +20,7 @@ pub struct ObjBundle {
 #[derive(Debug, TypeUuid, TypePath)]
 #[uuid = "39cadc56-aa9c-4543-8640-a018b74b5052"]
 pub struct LoadedObj {
-    pub meshes: Vec<OptimizedMesh>,
+    pub meshes: Vec<Mesh>,
 }
 
 pub struct ObjLoaderPlugin;
@@ -84,11 +83,7 @@ pub async fn load_obj<'a, 'b>(
 
     let start = Instant::now();
 
-    let meshes = models
-        .iter()
-        .map(generate_mesh)
-        .map(optimize_mesh)
-        .collect();
+    let meshes = models.iter().map(generate_mesh).collect();
 
     info!(
         "mesh generated and optimized {}ms",
@@ -99,69 +94,63 @@ pub async fn load_obj<'a, 'b>(
 }
 
 fn generate_mesh(model: &tobj::Model) -> Mesh {
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
-
-    if !model.mesh.positions.is_empty() {
-        let mut positions = vec![];
-        for verts in model.mesh.positions.chunks_exact(3) {
-            let [v0, v1, v2] = verts else {
-                unreachable!();
-            };
-            positions.push([*v0, *v1, *v2]);
-        }
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    assert!(!model.mesh.positions.is_empty(), "Mesh requires positions");
+    let mut positions = vec![];
+    for verts in model.mesh.positions.chunks_exact(3) {
+        let [v0, v1, v2] = verts else {
+            unreachable!();
+        };
+        positions.push([*v0, *v1, *v2]);
     }
 
-    if !model.mesh.texcoords.is_empty() {
-        let mut uvs = vec![];
+    let mut uvs = vec![];
+    if model.mesh.texcoords.is_empty() {
+        uvs = vec![[0.0, 0.0]; positions.len()];
+    } else {
         for uv in model.mesh.texcoords.chunks_exact(2) {
             let [u, v] = uv else {
                 unreachable!();
             };
             uvs.push([*u, *v]);
         }
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     }
 
-    if !model.mesh.vertex_color.is_empty() {
-        let mut vertex_color = vec![];
-        for color in model.mesh.vertex_color.chunks_exact(3) {
-            let [r, g, b] = color else {
-                unreachable!();
-            };
-            vertex_color.push([*r, *g, *b]);
-        }
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vertex_color);
+    assert!(!model.mesh.indices.is_empty(), "Mesh requires indices");
+    let mut indices = vec![];
+    for index in &model.mesh.indices {
+        indices.push(*index);
     }
 
-    if !model.mesh.indices.is_empty() {
-        let mut indices = vec![];
-        for index in &model.mesh.indices {
-            indices.push(*index);
-        }
-        mesh.set_indices(Some(Indices::U32(indices)));
+    assert!(!model.mesh.normals.is_empty(), "Mesh requires normals");
+    let mut normals = vec![];
+    for n in model.mesh.normals.chunks_exact(3) {
+        let [n0, n1, n2] = n else {
+            unreachable!();
+        };
+        let n = [
+            (n0 * 127.0 + 127.0) as u8,
+            (n1 * 127.0 + 127.0) as u8,
+            (n2 * 127.0 + 127.0) as u8,
+            0,
+        ];
+        normals.push(n);
     }
 
-    if model.mesh.normals.is_empty() {
-        mesh.duplicate_vertices();
-        mesh.compute_flat_normals();
-    } else {
-        let mut normals = vec![];
-        for n in model.mesh.normals.chunks_exact(3) {
-            let [n0, n1, n2] = n else {
-                unreachable!();
-            };
-            normals.push([*n0, *n1, *n2]);
-        }
-        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    let mut vertices = vec![];
+    for (pos, (norm, uv)) in positions.iter().zip(normals.iter().zip(uvs.iter())) {
+        vertices.push(Vertex {
+            pos: [pos[0], pos[1], pos[2], 0.0],
+            norm: *norm,
+            uv: *uv,
+        });
     }
 
-    mesh
+    optimize_mesh(&vertices, &indices)
 }
 
 fn spawn_mesh(
     mut commands: Commands,
-    query: Query<(Entity, &Handle<LoadedObj>), Without<OptimizedMesh>>,
+    query: Query<(Entity, &Handle<LoadedObj>), Without<Mesh>>,
     obj_assets: Res<Assets<LoadedObj>>,
 ) {
     for (entity, obj_handle) in query.iter() {
