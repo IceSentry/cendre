@@ -13,19 +13,24 @@
 use std::time::{Duration, Instant};
 
 use ash::vk;
-use bevy::asset::ChangeWatcher;
-use bevy::window::WindowResized;
-use bevy::winit::WinitWindows;
 use bevy::{
-    a11y::AccessibilityPlugin, app::AppExit, input::InputPlugin, log::LogPlugin, prelude::*,
-    winit::WinitPlugin,
+    a11y::AccessibilityPlugin,
+    app::AppExit,
+    asset::ChangeWatcher,
+    input::InputPlugin,
+    log::LogPlugin,
+    prelude::*,
+    window::WindowResized,
+    winit::{WinitPlugin, WinitWindows},
 };
-use cendre::instance::{CendreInstance, Pipeline};
-use cendre::obj_loader::{ObjBundle, ObjLoaderPlugin};
-use cendre::optimized_mesh::{
-    prepare_mesh, IndexBuffer, MeshletBuffer, MeshletsCount, OptimizedMesh, VertexBuffer,
+use cendre::{
+    instance::{CendreInstance, Pipeline},
+    obj_loader::{ObjBundle, ObjLoaderPlugin},
+    optimized_mesh::{
+        prepare_mesh, IndexBuffer, MeshletBuffer, MeshletsCount, OptimizedMesh, VertexBuffer,
+    },
+    RTXEnabled,
 };
-use cendre::RTXEnabled;
 
 pub const OBJ_PATH: &str = "models/bunny.obj";
 

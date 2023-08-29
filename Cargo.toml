@@ -11,11 +11,11 @@ opt-level = 3
 
 [dependencies]
 anyhow = "1.0.70"
-ash = { git = "https://github.com/ash-rs/ash.git", rev = "53c395b6b6603faa5cc68d472f8d991f1e3fa126", features = [
+ash = { git = "https://github.com/ash-rs/ash", rev = "0652aee", features = [
     "linked",
     "debug",
 ] }
-ash-window = { git = "https://github.com/ash-rs/ash.git", rev = "53c395b6b6603faa5cc68d472f8d991f1e3fa126" }
+ash-window = { git = "https://github.com/ash-rs/ash", rev = "0652aee" }
 bevy = { version = "0.11", default-features = false, features = [
     "bevy_winit",
     "bevy_asset",
@@ -23,9 +23,8 @@ bevy = { version = "0.11", default-features = false, features = [
     "filesystem_watcher",
 ] }
 bytemuck = { version = "1.13.1", features = ["derive"] }
-# gpu-allocator = "0.22.0"
-# Use a patched version that uses the git version of ash
-gpu-allocator = { path = "../gpu-allocator" }
+# Branch that uses a more recent version of ash
+gpu-allocator = { git = "https://github.com/Traverse-Research/gpu-allocator.git", rev = "26eaf3" }
 meshopt = "0.1.9"
 raw-window-handle = "0.5.2"
 shaderc = "0.8.2"
@@ -39,3 +38,7 @@ winit = "0.28.3"
 git = "https://github.com/icesentry/naga.git"
 branch = "glsl-mesh-shader"
 features = ["wgsl-in", "spv-out", "glsl-in"]
+
+[patch.crates-io]
+ash = { git = "https://github.com/ash-rs/ash", rev = "0652aee" }
+ash-window = { git = "https://github.com/ash-rs/ash", rev = "0652aee" }

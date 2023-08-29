@@ -293,6 +293,7 @@ impl CendreInstance {
             physical_device,
             debug_settings: default(),
             buffer_device_address,
+            allocation_sizes: default(),
         })
         .unwrap();
 
