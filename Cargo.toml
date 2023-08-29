@@ -16,7 +16,7 @@ ash = { git = "https://github.com/ash-rs/ash.git", rev = "53c395b6b6603faa5cc68d
     "debug",
 ] }
 ash-window = { git = "https://github.com/ash-rs/ash.git", rev = "53c395b6b6603faa5cc68d472f8d991f1e3fa126" }
-bevy = { version = "0.10.1", default-features = false, features = [
+bevy = { version = "0.11", default-features = false, features = [
     "bevy_winit",
     "bevy_asset",
     "bevy_render",

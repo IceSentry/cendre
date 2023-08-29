@@ -2,7 +2,7 @@ use anyhow::Context;
 use bevy::{
     asset::{AssetLoader, LoadContext, LoadedAsset},
     prelude::*,
-    reflect::TypeUuid,
+    reflect::{TypePath, TypeUuid},
     render::{mesh::Indices, render_resource::PrimitiveTopology},
     utils::BoxedFuture,
 };
@@ -18,7 +18,7 @@ pub struct ObjBundle {
     pub obj: Handle<LoadedObj>,
 }
 
-#[derive(Debug, TypeUuid)]
+#[derive(Debug, TypeUuid, TypePath)]
 #[uuid = "39cadc56-aa9c-4543-8640-a018b74b5052"]
 pub struct LoadedObj {
     pub meshes: Vec<OptimizedMesh>,
@@ -29,7 +29,7 @@ impl Plugin for ObjLoaderPlugin {
     fn build(&self, app: &mut App) {
         app.add_asset::<LoadedObj>()
             .init_asset_loader::<ObjLoader>()
-            .add_system(spawn_mesh);
+            .add_systems(Update, spawn_mesh);
     }
 }
 

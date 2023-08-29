@@ -10,9 +10,10 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::type_complexity)]
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ash::vk;
+use bevy::asset::ChangeWatcher;
 use bevy::window::WindowResized;
 use bevy::winit::WinitWindows;
 use bevy::{
@@ -31,31 +32,29 @@ pub const OBJ_PATH: &str = "models/bunny.obj";
 fn main() {
     App::new()
         .insert_resource(RTXEnabled(false))
-        .add_plugins(MinimalPlugins)
-        .add_plugin(WindowPlugin {
-            primary_window: Some(Window {
-                title: "cendre".into(),
+        .add_plugins((
+            MinimalPlugins,
+            WindowPlugin {
+                primary_window: Some(Window {
+                    title: "cendre".into(),
+                    ..default()
+                }),
                 ..default()
-            }),
-            ..default()
-        })
-        .add_plugin(AccessibilityPlugin)
-        .add_plugin(WinitPlugin)
-        .add_plugin(InputPlugin)
-        .add_plugin(LogPlugin::default())
-        .add_plugin(AssetPlugin {
-            watch_for_changes: true,
-            ..default()
-        })
-        .add_plugin(ObjLoaderPlugin)
+            },
+            AccessibilityPlugin,
+            WinitPlugin,
+            InputPlugin,
+            LogPlugin::default(),
+            AssetPlugin {
+                watch_for_changes: ChangeWatcher::with_delay(Duration::from_millis(250)),
+                ..default()
+            },
+            ObjLoaderPlugin,
+        ))
         .add_asset::<Mesh>()
-        .add_startup_system(load_mesh)
-        .add_system(exit_on_esc)
-        // renderer
-        .add_startup_system(init_cendre)
-        .add_systems((resize, update).chain())
-        .add_system(prepare_mesh)
-        .add_system(toggle_rtx)
+        .add_systems(Startup, (init_cendre, load_mesh))
+        .add_systems(Update, (resize, update).chain())
+        .add_systems(Update, (prepare_mesh, toggle_rtx, exit_on_esc))
         .run();
 }
 
