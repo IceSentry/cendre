@@ -550,6 +550,9 @@ impl CendreInstance {
 
     #[must_use]
     pub fn begin_frame(&self) -> (u32, vk::CommandBuffer) {
+        #[cfg(feature = "trace")]
+        let _span = bevy::utils::tracing::info_span!("begin frame").entered();
+
         let (image_index, _) = unsafe {
             self.swapchain_loader
                 .acquire_next_image(
@@ -609,8 +612,10 @@ impl CendreInstance {
         (image_index, command_buffer)
     }
 
-    #[must_use]
-    pub fn end_frame(&self, image_index: u32, command_buffer: vk::CommandBuffer) -> (f64, f64) {
+    pub fn end_frame(&self, image_index: u32, command_buffer: vk::CommandBuffer) {
+        #[cfg(feature = "trace")]
+        let _span = bevy::utils::tracing::info_span!("end frame").entered();
+
         unsafe {
             let render_end_barrier = image_barrier(
                 self.swapchain.images[image_index as usize],
@@ -640,16 +645,31 @@ impl CendreInstance {
         }
 
         unsafe {
+            #[cfg(feature = "trace")]
+            let _span = bevy::utils::tracing::info_span!("end command buffer").entered();
             self.device.end_command_buffer(command_buffer).unwrap();
         }
 
-        self.submit();
-        self.present(image_index);
-
-        unsafe {
-            self.device.device_wait_idle().unwrap();
+        {
+            #[cfg(feature = "trace")]
+            let _span = bevy::utils::tracing::info_span!("submit").entered();
+            self.submit();
+        }
+        {
+            #[cfg(feature = "trace")]
+            let _span = bevy::utils::tracing::info_span!("present").entered();
+            self.present(image_index);
         }
 
+        unsafe {
+            #[cfg(feature = "trace")]
+            let _span = bevy::utils::tracing::info_span!("wait idle").entered();
+            self.device.device_wait_idle().unwrap();
+        }
+    }
+
+    #[must_use]
+    pub fn get_frame_time(&self) -> (f64, f64) {
         let mut data: [i64; 2] = [0, 0];
         unsafe {
             self.device

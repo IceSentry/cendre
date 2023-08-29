@@ -20,6 +20,7 @@ bevy = { version = "0.11", default-features = false, features = [
     "bevy_winit",
     "bevy_asset",
     "filesystem_watcher",
+    "trace",
 ] }
 bytemuck = { version = "1.13.1", features = ["derive"] }
 # Branch that uses a more recent version of ash
@@ -42,3 +43,8 @@ features = ["wgsl-in", "spv-out", "glsl-in"]
 [patch.crates-io]
 ash = { git = "https://github.com/ash-rs/ash", rev = "0652aee" }
 ash-window = { git = "https://github.com/ash-rs/ash", rev = "0652aee" }
+
+[features]
+# Add more traces when used with bevy/trace feature
+# cargo run --features bevy/trace_chrome,cendre/trace
+trace = []

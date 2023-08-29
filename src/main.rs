@@ -195,6 +195,9 @@ fn update(
     // BEGIN RENDER PASS
 
     unsafe {
+        #[cfg(feature = "trace")]
+        let _span = bevy::utils::tracing::info_span!("begin render pass").entered();
+
         let clear_color = vk::ClearValue {
             color: vk::ClearColorValue {
                 float32: [0.3, 0.3, 0.3, 1.0],
@@ -216,77 +219,91 @@ fn update(
     }
 
     // DRAW
+    {
+        #[cfg(feature = "trace")]
+        let _span = bevy::utils::tracing::info_span!("draw").entered();
 
-    let width = window.physical_width();
-    let height = window.physical_height();
-    cendre.set_viewport(command_buffer, width, height);
+        let width = window.physical_width();
+        let height = window.physical_height();
+        cendre.set_viewport(command_buffer, width, height);
 
-    let pipeline = if rtx_enabled.0 {
-        &cendre_pipeline_rtx.as_ref().unwrap().0
-    } else {
-        &cendre_pipeline.0
-    };
-    unsafe {
-        device.cmd_bind_pipeline(
-            command_buffer,
-            vk::PipelineBindPoint::GRAPHICS,
-            pipeline.vk_pipeline(),
-        );
-    }
+        let pipeline = if rtx_enabled.0 {
+            &cendre_pipeline_rtx.as_ref().unwrap().0
+        } else {
+            &cendre_pipeline.0
+        };
+        unsafe {
+            device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.vk_pipeline(),
+            );
+        }
 
-    let draw_count = 2000;
+        let draw_count = 2000;
 
-    for (mesh, vb, ib, mb, meshlets_count) in &meshes {
-        let indices = &mesh.indices;
+        for (mesh, vb, ib, mb, meshlets_count) in &meshes {
+            let indices = &mesh.indices;
 
-        let vertex_buffer_info = vb.descriptor_info(0);
-        if rtx_enabled.0 {
-            if let Some(mb) = mb {
-                let Some(meshlets_count) = &meshlets_count else {
-                    continue;
-                };
+            let vertex_buffer_info = vb.descriptor_info(0);
+            if rtx_enabled.0 {
+                if let Some(mb) = mb {
+                    let Some(meshlets_count) = &meshlets_count else {
+                        continue;
+                    };
 
-                let mesh_buffer_info = mb.descriptor_info(0);
-                let descriptor_writes = [
-                    vb.write_descriptor(0, vk::DescriptorType::STORAGE_BUFFER, &vertex_buffer_info),
-                    mb.write_descriptor(1, vk::DescriptorType::STORAGE_BUFFER, &mesh_buffer_info),
-                ];
+                    let mesh_buffer_info = mb.descriptor_info(0);
+                    let descriptor_writes = [
+                        vb.write_descriptor(
+                            0,
+                            vk::DescriptorType::STORAGE_BUFFER,
+                            &vertex_buffer_info,
+                        ),
+                        mb.write_descriptor(
+                            1,
+                            vk::DescriptorType::STORAGE_BUFFER,
+                            &mesh_buffer_info,
+                        ),
+                    ];
+                    unsafe {
+                        cendre.push_descriptor.cmd_push_descriptor_set(
+                            command_buffer,
+                            vk::PipelineBindPoint::GRAPHICS,
+                            pipeline.layout.vk_pipeline_layout(),
+                            0,
+                            &descriptor_writes,
+                        );
+                        for _ in 0..draw_count {
+                            cendre.mesh_shader.cmd_draw_mesh_tasks(
+                                command_buffer,
+                                meshlets_count.0,
+                                0,
+                            );
+                        }
+                    }
+                }
+            } else {
                 unsafe {
                     cendre.push_descriptor.cmd_push_descriptor_set(
                         command_buffer,
                         vk::PipelineBindPoint::GRAPHICS,
                         pipeline.layout.vk_pipeline_layout(),
                         0,
-                        &descriptor_writes,
+                        std::slice::from_ref(&vb.write_descriptor(
+                            0,
+                            vk::DescriptorType::STORAGE_BUFFER,
+                            &vertex_buffer_info,
+                        )),
+                    );
+                    device.cmd_bind_index_buffer(
+                        command_buffer,
+                        ib.vk_buffer(),
+                        0,
+                        vk::IndexType::UINT32,
                     );
                     for _ in 0..draw_count {
-                        cendre
-                            .mesh_shader
-                            .cmd_draw_mesh_tasks(command_buffer, meshlets_count.0, 0);
+                        device.cmd_draw_indexed(command_buffer, indices.len() as u32, 1, 0, 0, 0);
                     }
-                }
-            }
-        } else {
-            unsafe {
-                cendre.push_descriptor.cmd_push_descriptor_set(
-                    command_buffer,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    pipeline.layout.vk_pipeline_layout(),
-                    0,
-                    std::slice::from_ref(&vb.write_descriptor(
-                        0,
-                        vk::DescriptorType::STORAGE_BUFFER,
-                        &vertex_buffer_info,
-                    )),
-                );
-                device.cmd_bind_index_buffer(
-                    command_buffer,
-                    ib.vk_buffer(),
-                    0,
-                    vk::IndexType::UINT32,
-                );
-                for _ in 0..draw_count {
-                    device.cmd_draw_indexed(command_buffer, indices.len() as u32, 1, 0, 0, 0);
                 }
             }
         }
@@ -295,21 +312,31 @@ fn update(
     // END RENDER PASS
 
     unsafe {
+        #[cfg(feature = "trace")]
+        let _span = bevy::utils::tracing::info_span!("end render pass").entered();
         device.cmd_end_render_pass(command_buffer);
     }
 
     // END
 
-    let (frame_gpu_begin, frame_gpu_end) = cendre.end_frame(image_index, command_buffer);
-    *frame_gpu_avg = *frame_gpu_avg * 0.95 + (frame_gpu_end - frame_gpu_begin) * 0.05;
-    *frame_cpu_avg = *frame_cpu_avg * 0.95 + (begin_frame.elapsed().as_secs_f64() * 1000.0) * 0.05;
+    cendre.end_frame(image_index, command_buffer);
 
-    window.title = format!(
-        "cpu: {:.2}ms gpu: {:.2}ms RTX: {}",
-        *frame_cpu_avg,
-        *frame_gpu_avg,
-        if rtx_enabled.0 { "ON" } else { "OFF" }
-    );
+    {
+        #[cfg(feature = "trace")]
+        let _span = bevy::utils::tracing::info_span!("update frame time").entered();
+
+        let (frame_gpu_begin, frame_gpu_end) = cendre.get_frame_time();
+        *frame_gpu_avg = *frame_gpu_avg * 0.95 + (frame_gpu_end - frame_gpu_begin) * 0.05;
+        *frame_cpu_avg =
+            *frame_cpu_avg * 0.95 + (begin_frame.elapsed().as_secs_f64() * 1000.0) * 0.05;
+
+        window.title = format!(
+            "cpu: {:.2}ms gpu: {:.2}ms RTX: {}",
+            *frame_cpu_avg,
+            *frame_gpu_avg,
+            if rtx_enabled.0 { "ON" } else { "OFF" }
+        );
+    }
 }
 
 fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreInstance>) {
