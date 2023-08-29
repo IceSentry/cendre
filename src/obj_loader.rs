@@ -104,7 +104,9 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     if !model.mesh.positions.is_empty() {
         let mut positions = vec![];
         for verts in model.mesh.positions.chunks_exact(3) {
-            let [v0, v1, v2] = verts else { unreachable!(); };
+            let [v0, v1, v2] = verts else {
+                unreachable!();
+            };
             positions.push([*v0, *v1, *v2]);
         }
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
@@ -113,7 +115,9 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     if !model.mesh.texcoords.is_empty() {
         let mut uvs = vec![];
         for uv in model.mesh.texcoords.chunks_exact(2) {
-            let [u, v] = uv else { unreachable!(); };
+            let [u, v] = uv else {
+                unreachable!();
+            };
             uvs.push([*u, *v]);
         }
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
@@ -122,7 +126,9 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     if !model.mesh.vertex_color.is_empty() {
         let mut vertex_color = vec![];
         for color in model.mesh.vertex_color.chunks_exact(3) {
-            let [r, g, b] = color else { unreachable!(); };
+            let [r, g, b] = color else {
+                unreachable!();
+            };
             vertex_color.push([*r, *g, *b]);
         }
         mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vertex_color);
@@ -142,7 +148,9 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
     } else {
         let mut normals = vec![];
         for n in model.mesh.normals.chunks_exact(3) {
-            let [n0, n1, n2] = n else { unreachable!(); };
+            let [n0, n1, n2] = n else {
+                unreachable!();
+            };
             normals.push([*n0, *n1, *n2]);
         }
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);

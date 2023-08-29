@@ -12,12 +12,14 @@ use crate::instance::{Buffer, CendreInstance};
 const TRIANGLE_COUNT: usize = 126;
 
 #[repr(C)]
-#[derive(Copy, Clone, Default, bytemuck::Pod, bytemuck::Zeroable, Debug)]
+#[derive(Copy, Clone, Default, bytemuck::Zeroable, Debug)]
 pub struct Vertex {
     pub pos: [f32; 4],
     pub norm: [u8; 4], // u32
     pub uv: [f32; 2],
 }
+
+unsafe impl bytemuck::Pod for Vertex {}
 
 #[derive(Component, Debug, Clone)]
 pub struct OptimizedMesh {

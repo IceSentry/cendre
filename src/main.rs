@@ -241,7 +241,9 @@ fn update(
         let vertex_buffer_info = vb.descriptor_info(0);
         if rtx_enabled.0 {
             if let Some(mb) = mb {
-                let Some(meshlets_count) = &meshlets_count else { continue; };
+                let Some(meshlets_count) = &meshlets_count else {
+                    continue;
+                };
 
                 let mesh_buffer_info = mb.descriptor_info(0);
                 let descriptor_writes = [
