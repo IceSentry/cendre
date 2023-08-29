@@ -10,7 +10,7 @@ opt-level = 1
 opt-level = 3
 
 [dependencies]
-anyhow = "1.0.70"
+anyhow = "1.0.75"
 ash = { git = "https://github.com/ash-rs/ash", rev = "0652aee", features = [
     "linked",
     "debug",
@@ -24,21 +24,22 @@ bevy = { version = "0.11", default-features = false, features = [
 ] }
 bytemuck = { version = "1.13.1", features = ["derive"] }
 # Branch that uses a more recent version of ash
-gpu-allocator = { git = "https://github.com/Traverse-Research/gpu-allocator.git", rev = "26eaf3" }
+gpu-allocator = { git = "https://github.com/Traverse-Research/gpu-allocator.git", branch = "ash-0.38" }
 meshopt = "0.1.9"
 raw-window-handle = "0.5.2"
 shaderc = "0.8.2"
 tobj = { version = "4.0.0", features = ["async"] }
-winit = "0.28.3"
+winit = "0.28"
 
 # Use a custom version of naga with mesh shader hacked in
 [dependencies.naga]
-# version = "0.11.0"
 # path = "../naga"
 git = "https://github.com/icesentry/naga.git"
 branch = "glsl-mesh-shader"
 features = ["wgsl-in", "spv-out", "glsl-in"]
 
+# This is needed because bevy_render depends on wgpu which uses a different version of ash.
+# I don't actually use wgpu for anything but it still ends up in the tree unfortunately.
 [patch.crates-io]
 ash = { git = "https://github.com/ash-rs/ash", rev = "0652aee" }
 ash-window = { git = "https://github.com/ash-rs/ash", rev = "0652aee" }
