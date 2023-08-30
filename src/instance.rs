@@ -12,6 +12,7 @@ use ash::{
         khr::{PushDescriptor, Surface, Swapchain},
         nv::MeshShader,
     },
+    vk::DescriptorUpdateTemplateType,
     Device,
 };
 use ash::{vk, Entry, Instance};
@@ -84,6 +85,17 @@ impl PipelineLayout {
     }
 }
 
+pub struct DescriptorUpdateTemplate {
+    vk_descriptor_update_template: Arc<Mutex<vk::DescriptorUpdateTemplate>>,
+}
+
+impl DescriptorUpdateTemplate {
+    #[must_use]
+    pub fn vk_descriptor_update_template(&self) -> vk::DescriptorUpdateTemplate {
+        *self.vk_descriptor_update_template.lock().unwrap()
+    }
+}
+
 pub struct Pipeline {
     pub layout: PipelineLayout,
     vk_pipeline: Arc<Mutex<vk::Pipeline>>,
@@ -136,6 +148,7 @@ pub struct CendreInstance {
     pipeline_layouts: Vec<Arc<Mutex<vk::PipelineLayout>>>,
     pipelines: Vec<Arc<Mutex<vk::Pipeline>>>,
     descriptor_set_layouts: Vec<Arc<Mutex<vk::DescriptorSetLayout>>>,
+    descriptor_update_templates: Vec<Arc<Mutex<vk::DescriptorUpdateTemplate>>>,
     shader_modules: Vec<Arc<Mutex<vk::ShaderModule>>>,
     allocator: std::mem::ManuallyDrop<Allocator>,
     allocations: Vec<Arc<Mutex<Option<Allocation>>>>,
@@ -320,6 +333,7 @@ impl CendreInstance {
             pipeline_layouts: vec![],
             pipelines: vec![],
             descriptor_set_layouts: vec![],
+            descriptor_update_templates: vec![],
             shader_modules: vec![],
             allocator: std::mem::ManuallyDrop::new(allocator),
             allocations: vec![],
@@ -457,29 +471,71 @@ impl CendreInstance {
         &mut self,
         bindings: &[vk::DescriptorSetLayoutBinding],
     ) -> anyhow::Result<PipelineLayout> {
-        let create_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR)
-            .bindings(bindings);
-        let descriptor_set_layout = unsafe {
-            self.device
-                .create_descriptor_set_layout(&create_info, None)
-                .unwrap()
-        };
+        let set_layout = unsafe { self.create_set_layout(bindings)? };
 
-        let create_info = vk::PipelineLayoutCreateInfo::default()
-            .set_layouts(std::slice::from_ref(&descriptor_set_layout));
+        let create_info =
+            vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&set_layout));
         let pipeline_layout = unsafe { self.device.create_pipeline_layout(&create_info, None)? };
 
         let pipeline_layout = Arc::new(Mutex::new(pipeline_layout));
         self.pipeline_layouts.push(pipeline_layout.clone());
 
-        let descriptor_set_layout = Arc::new(Mutex::new(descriptor_set_layout));
+        let descriptor_set_layout = Arc::new(Mutex::new(set_layout));
         self.descriptor_set_layouts
             .push(descriptor_set_layout.clone());
 
         Ok(PipelineLayout {
             vk_pipeline_layout: pipeline_layout,
             vk_descriptor_set_layout: descriptor_set_layout,
+        })
+    }
+
+    /// # Safety
+    /// Make sure the device outlives the layout
+    unsafe fn create_set_layout(
+        &mut self,
+        bindings: &[vk::DescriptorSetLayoutBinding],
+    ) -> anyhow::Result<vk::DescriptorSetLayout> {
+        let create_info = vk::DescriptorSetLayoutCreateInfo::default()
+            .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR)
+            .bindings(bindings);
+        Ok(self
+            .device
+            .create_descriptor_set_layout(&create_info, None)?)
+    }
+
+    pub fn create_update_template(
+        &mut self,
+        bind_point: vk::PipelineBindPoint,
+        template_type: DescriptorUpdateTemplateType,
+        layout: &PipelineLayout,
+        bindings: &[vk::DescriptorSetLayoutBinding],
+        entries: &[vk::DescriptorUpdateTemplateEntry],
+    ) -> anyhow::Result<DescriptorUpdateTemplate> {
+        // println!("bindings {bindings:#?}");
+        // println!("entries {entries:#?}");
+
+        let set_layout = unsafe { self.create_set_layout(bindings)? };
+        let create_info = vk::DescriptorUpdateTemplateCreateInfo::default()
+            .descriptor_update_entries(entries)
+            .template_type(template_type)
+            .descriptor_set_layout(set_layout)
+            .pipeline_bind_point(bind_point)
+            .pipeline_layout(layout.vk_pipeline_layout());
+        // println!("{create_info:?}");
+        let update_template = unsafe {
+            self.device
+                .create_descriptor_update_template(&create_info, None)?
+        };
+        // println!("{update_template:?}");
+        let update_template = Arc::new(Mutex::new(update_template));
+        self.descriptor_update_templates
+            .push(update_template.clone());
+
+        unsafe { self.device.destroy_descriptor_set_layout(set_layout, None) };
+
+        Ok(DescriptorUpdateTemplate {
+            vk_descriptor_update_template: update_template,
         })
     }
 
@@ -781,6 +837,13 @@ impl Drop for CendreInstance {
             for descriptor_set_layout in &self.descriptor_set_layouts {
                 self.device
                     .destroy_descriptor_set_layout(*descriptor_set_layout.lock().unwrap(), None);
+            }
+
+            for descriptor_update_template in &self.descriptor_update_templates {
+                self.device.destroy_descriptor_update_template(
+                    *descriptor_update_template.lock().unwrap(),
+                    None,
+                );
             }
 
             self.device

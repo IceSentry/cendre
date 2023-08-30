@@ -12,7 +12,7 @@
 
 use std::time::{Duration, Instant};
 
-use ash::vk;
+use ash::vk::{self, DescriptorUpdateTemplateType};
 use bevy::{
     a11y::AccessibilityPlugin,
     app::AppExit,
@@ -20,11 +20,11 @@ use bevy::{
     input::InputPlugin,
     log::LogPlugin,
     prelude::*,
-    window::WindowResized,
+    window::{PresentMode, WindowResized},
     winit::{WinitPlugin, WinitWindows},
 };
 use cendre::{
-    instance::{CendreInstance, Pipeline},
+    instance::{CendreInstance, DescriptorUpdateTemplate, Pipeline},
     mesh::{prepare_mesh, IndexBuffer, Mesh, MeshletBuffer, MeshletsCount, VertexBuffer},
     obj_loader::{ObjBundle, ObjLoaderPlugin},
     RTXEnabled,
@@ -34,12 +34,13 @@ pub const OBJ_PATH: &str = "models/bunny.obj";
 
 fn main() {
     App::new()
-        .insert_resource(RTXEnabled(false))
+        .insert_resource(RTXEnabled(true))
         .add_plugins((
             MinimalPlugins,
             WindowPlugin {
                 primary_window: Some(Window {
                     title: "cendre".into(),
+                    present_mode: PresentMode::AutoNoVsync,
                     ..default()
                 }),
                 ..default()
@@ -77,6 +78,12 @@ pub struct CendrePipeline(pub Pipeline);
 #[derive(Resource)]
 pub struct CendrePipelineRTX(pub Pipeline);
 
+#[derive(Resource, Deref)]
+pub struct CendreMeshUpdateTemplateRTX(pub DescriptorUpdateTemplate);
+#[derive(Resource, Deref)]
+pub struct CendreMeshUpdateTemplate(pub DescriptorUpdateTemplate);
+
+#[allow(clippy::too_many_lines)]
 fn init_cendre(
     mut commands: Commands,
     windows: Query<Entity, With<Window>>,
@@ -102,29 +109,62 @@ fn init_cendre(
         vk::ShaderStageFlags::FRAGMENT,
     );
 
+    let descriptor_stride = std::mem::size_of::<vk::DescriptorBufferInfo>();
+
+    warn!("offset: {}", descriptor_stride);
+
     if cendre.rtx_supported {
         let mesh_shader = cendre.load_shader(
             "assets/shaders/meshlet.mesh.glsl",
             "main",
             vk::ShaderStageFlags::MESH_NV,
         );
-        let pipeline_layout = cendre
-            .create_pipeline_layout(&[
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(0)
-                    .descriptor_count(1)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .stage_flags(vk::ShaderStageFlags::MESH_NV),
-                vk::DescriptorSetLayoutBinding::default()
-                    .binding(1)
-                    .descriptor_count(1)
-                    .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                    .stage_flags(vk::ShaderStageFlags::MESH_NV),
-            ])
+        let bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_count(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .stage_flags(vk::ShaderStageFlags::MESH_NV),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_count(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .stage_flags(vk::ShaderStageFlags::MESH_NV),
+        ];
+        #[allow(clippy::erasing_op)]
+        #[allow(clippy::identity_op)]
+        let entries = [
+            vk::DescriptorUpdateTemplateEntry::default()
+                .dst_binding(0)
+                .dst_array_element(0)
+                .descriptor_count(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .offset(descriptor_stride * 0)
+                .stride(descriptor_stride),
+            vk::DescriptorUpdateTemplateEntry::default()
+                .dst_binding(1)
+                .dst_array_element(0)
+                .descriptor_count(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .offset(descriptor_stride * 1)
+                .stride(descriptor_stride),
+        ];
+
+        let mesh_layout_rtx = cendre.create_pipeline_layout(&bindings).unwrap();
+
+        let mesh_update_template_rtx = cendre
+            .create_update_template(
+                vk::PipelineBindPoint::GRAPHICS,
+                DescriptorUpdateTemplateType::PUSH_DESCRIPTORS_KHR,
+                &mesh_layout_rtx,
+                &bindings,
+                &entries,
+            )
             .unwrap();
-        let pipeline = cendre
+        commands.insert_resource(CendreMeshUpdateTemplateRTX(mesh_update_template_rtx));
+        let pipeline_rtx = cendre
             .create_graphics_pipeline(
-                pipeline_layout,
+                mesh_layout_rtx,
                 cendre.render_pass,
                 &[mesh_shader.create_info(), fragment_shader.create_info()],
                 vk::PrimitiveTopology::TRIANGLE_LIST,
@@ -135,20 +175,38 @@ fn init_cendre(
                     .line_width(1.0),
             )
             .expect("Failed to create graphics pipeline RTX");
-        commands.insert_resource(CendrePipelineRTX(pipeline));
+        commands.insert_resource(CendrePipelineRTX(pipeline_rtx));
     }
 
-    let pipeline_layout = cendre
-        .create_pipeline_layout(&[vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_count(1)
-            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-            .stage_flags(vk::ShaderStageFlags::VERTEX)])
+    let bindings = [vk::DescriptorSetLayoutBinding::default()
+        .binding(0)
+        .descriptor_count(1)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .stage_flags(vk::ShaderStageFlags::VERTEX)];
+    #[allow(clippy::erasing_op)]
+    #[allow(clippy::identity_op)]
+    let entries = [vk::DescriptorUpdateTemplateEntry::default()
+        .dst_binding(0)
+        .dst_array_element(0)
+        .descriptor_count(1)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .offset(descriptor_stride * 0)
+        .stride(descriptor_stride)];
+    let mesh_layout = cendre.create_pipeline_layout(&bindings).unwrap();
+    let mesh_update_template = cendre
+        .create_update_template(
+            vk::PipelineBindPoint::GRAPHICS,
+            DescriptorUpdateTemplateType::PUSH_DESCRIPTORS_KHR,
+            &mesh_layout,
+            &bindings,
+            &entries,
+        )
         .unwrap();
+    commands.insert_resource(CendreMeshUpdateTemplate(mesh_update_template));
 
     let pipeline = cendre
         .create_graphics_pipeline(
-            pipeline_layout,
+            mesh_layout,
             cendre.render_pass,
             &[vertex_shader.create_info(), fragment_shader.create_info()],
             vk::PrimitiveTopology::TRIANGLE_LIST,
@@ -159,10 +217,11 @@ fn init_cendre(
                 .line_width(1.0),
         )
         .expect("Failed to create graphics pipeline");
-    info!("Pipeline created");
 
     commands.insert_resource(CendrePipeline(pipeline));
     commands.insert_resource(cendre);
+
+    info!("Pipeline created");
 }
 
 #[allow(clippy::too_many_lines)]
@@ -181,6 +240,8 @@ fn update(
     mut frame_gpu_avg: Local<f64>,
     mut frame_cpu_avg: Local<f64>,
     rtx_enabled: Res<RTXEnabled>,
+    mesh_update_template_rtx: Res<CendreMeshUpdateTemplateRTX>,
+    mesh_update_template: Res<CendreMeshUpdateTemplate>,
 ) {
     let begin_frame = Instant::now();
 
@@ -240,39 +301,32 @@ fn update(
             );
         }
 
-        let draw_count = 2000;
+        // let draw_count = 2000;
+        let draw_count = 1;
 
         for (mesh, vb, ib, mb, meshlets_count) in &meshes {
             let indices = &mesh.indices;
 
-            let vertex_buffer_info = vb.descriptor_info(0);
             if rtx_enabled.0 {
                 if let Some(mb) = mb {
                     let Some(meshlets_count) = &meshlets_count else {
                         continue;
                     };
 
-                    let mesh_buffer_info = mb.descriptor_info(0);
-                    let descriptor_writes = [
-                        vb.write_descriptor(
-                            0,
-                            vk::DescriptorType::STORAGE_BUFFER,
-                            &vertex_buffer_info,
-                        ),
-                        mb.write_descriptor(
-                            1,
-                            vk::DescriptorType::STORAGE_BUFFER,
-                            &mesh_buffer_info,
-                        ),
-                    ];
+                    let descriptors = [vb.descriptor_info(0), mb.descriptor_info(0)];
                     unsafe {
-                        cendre.push_descriptor.cmd_push_descriptor_set(
-                            command_buffer,
-                            vk::PipelineBindPoint::GRAPHICS,
-                            pipeline.layout.vk_pipeline_layout(),
-                            0,
-                            &descriptor_writes,
-                        );
+                        cendre
+                            .push_descriptor
+                            .cmd_push_descriptor_set_with_template(
+                                command_buffer,
+                                mesh_update_template_rtx.vk_descriptor_update_template(),
+                                pipeline.layout.vk_pipeline_layout(),
+                                0,
+                                descriptors.as_ptr().cast(),
+                            );
+                    }
+
+                    unsafe {
                         for _ in 0..draw_count {
                             cendre.mesh_shader.cmd_draw_mesh_tasks(
                                 command_buffer,
@@ -283,18 +337,19 @@ fn update(
                     }
                 }
             } else {
+                let descriptors = [vb.descriptor_info(0)];
                 unsafe {
-                    cendre.push_descriptor.cmd_push_descriptor_set(
-                        command_buffer,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        pipeline.layout.vk_pipeline_layout(),
-                        0,
-                        std::slice::from_ref(&vb.write_descriptor(
+                    cendre
+                        .push_descriptor
+                        .cmd_push_descriptor_set_with_template(
+                            command_buffer,
+                            mesh_update_template.vk_descriptor_update_template(),
+                            pipeline.layout.vk_pipeline_layout(),
                             0,
-                            vk::DescriptorType::STORAGE_BUFFER,
-                            &vertex_buffer_info,
-                        )),
-                    );
+                            descriptors.as_ptr().cast(),
+                        );
+                }
+                unsafe {
                     device.cmd_bind_index_buffer(
                         command_buffer,
                         ib.vk_buffer(),
