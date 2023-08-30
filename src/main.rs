@@ -190,9 +190,9 @@ fn update(
 ) {
     let begin_frame = Instant::now();
 
-    let mut window = windows.single_mut();
+    let rtx = cendre.rtx_supported && rtx_enabled.0;
 
-    let device = &cendre.device;
+    let mut window = windows.single_mut();
 
     // BEGIN
 
@@ -200,24 +200,24 @@ fn update(
 
     // BEGIN RENDER PASS
 
-    unsafe {
-        #[cfg(feature = "trace")]
-        let _span = bevy::utils::tracing::info_span!("begin render pass").entered();
+    #[cfg(feature = "trace")]
+    let _span = bevy::utils::tracing::info_span!("begin render pass").entered();
 
-        let clear_color = vk::ClearValue {
-            color: vk::ClearColorValue {
-                float32: [0.3, 0.3, 0.3, 1.0],
-            },
-        };
-        let render_pass_begin_info = vk::RenderPassBeginInfo::default()
-            .render_pass(cendre.render_pass)
-            .framebuffer(cendre.swapchain.framebuffers[image_index as usize])
-            .render_area(vk::Rect2D::default().extent(vk::Extent2D {
-                width: cendre.swapchain.width,
-                height: cendre.swapchain.height,
-            }))
-            .clear_values(std::slice::from_ref(&clear_color));
-        device.cmd_begin_render_pass(
+    let clear_color = vk::ClearValue {
+        color: vk::ClearColorValue {
+            float32: [0.3, 0.3, 0.3, 1.0],
+        },
+    };
+    let render_pass_begin_info = vk::RenderPassBeginInfo::default()
+        .render_pass(cendre.render_pass)
+        .framebuffer(cendre.swapchain.framebuffers[image_index as usize])
+        .render_area(vk::Rect2D::default().extent(vk::Extent2D {
+            width: cendre.swapchain.width,
+            height: cendre.swapchain.height,
+        }))
+        .clear_values(std::slice::from_ref(&clear_color));
+    unsafe {
+        cendre.device.cmd_begin_render_pass(
             command_buffer,
             &render_pass_begin_info,
             vk::SubpassContents::INLINE,
@@ -233,18 +233,12 @@ fn update(
         let height = window.physical_height();
         cendre.set_viewport(command_buffer, width, height);
 
-        let pipeline = if rtx_enabled.0 {
+        let pipeline = if rtx {
             &cendre_pipeline_rtx.as_ref().unwrap().0
         } else {
             &cendre_pipeline.0
         };
-        unsafe {
-            device.cmd_bind_pipeline(
-                command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipeline.vk_pipeline(),
-            );
-        }
+        cendre.bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
         // let draw_count = 2000;
         let draw_count = 1;
@@ -252,58 +246,38 @@ fn update(
         for (mesh, vb, ib, mb, meshlets_count) in &meshes {
             let indices = &mesh.indices;
 
-            if rtx_enabled.0 {
-                if let Some(mb) = mb {
-                    let Some(meshlets_count) = &meshlets_count else {
-                        continue;
-                    };
+            if rtx {
+                let Some(mb) = mb else {
+                    continue;
+                };
+                let Some(meshlets_count) = &meshlets_count else {
+                    continue;
+                };
 
-                    let descriptors = [vb.descriptor_info(0), mb.descriptor_info(0)];
-                    unsafe {
-                        cendre
-                            .push_descriptor
-                            .cmd_push_descriptor_set_with_template(
-                                command_buffer,
-                                mesh_update_template_rtx.vk_descriptor_update_template(),
-                                pipeline.layout.vk_pipeline_layout(),
-                                0,
-                                descriptors.as_ptr().cast(),
-                            );
-                    }
+                let descriptors = [vb.descriptor_info(0), mb.descriptor_info(0)];
+                cendre.push_descriptor_set_with_template(
+                    command_buffer,
+                    &mesh_update_template_rtx,
+                    &pipeline.layout,
+                    0,
+                    &descriptors,
+                );
 
-                    unsafe {
-                        for _ in 0..draw_count {
-                            cendre.mesh_shader.cmd_draw_mesh_tasks(
-                                command_buffer,
-                                meshlets_count.0,
-                                0,
-                            );
-                        }
-                    }
+                for _ in 0..draw_count {
+                    cendre.draw_mesh_tasks(command_buffer, meshlets_count.0, 0);
                 }
             } else {
                 let descriptors = [vb.descriptor_info(0)];
-                unsafe {
-                    cendre
-                        .push_descriptor
-                        .cmd_push_descriptor_set_with_template(
-                            command_buffer,
-                            mesh_update_template.vk_descriptor_update_template(),
-                            pipeline.layout.vk_pipeline_layout(),
-                            0,
-                            descriptors.as_ptr().cast(),
-                        );
-                }
-                unsafe {
-                    device.cmd_bind_index_buffer(
-                        command_buffer,
-                        ib.vk_buffer(),
-                        0,
-                        vk::IndexType::UINT32,
-                    );
-                    for _ in 0..draw_count {
-                        device.cmd_draw_indexed(command_buffer, indices.len() as u32, 1, 0, 0, 0);
-                    }
+                cendre.push_descriptor_set_with_template(
+                    command_buffer,
+                    &mesh_update_template,
+                    &pipeline.layout,
+                    0,
+                    &descriptors,
+                );
+                cendre.bind_index_buffer(command_buffer, ib, 0, vk::IndexType::UINT32);
+                for _ in 0..draw_count {
+                    cendre.draw_indexed(command_buffer, indices.len() as u32, 1, 0, 0, 0);
                 }
             }
         }
@@ -314,7 +288,7 @@ fn update(
     unsafe {
         #[cfg(feature = "trace")]
         let _span = bevy::utils::tracing::info_span!("end render pass").entered();
-        device.cmd_end_render_pass(command_buffer);
+        cendre.device.cmd_end_render_pass(command_buffer);
     }
 
     // END

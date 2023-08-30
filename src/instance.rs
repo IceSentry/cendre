@@ -549,6 +549,25 @@ impl CendreInstance {
         })
     }
 
+    pub fn push_descriptor_set_with_template(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        update_template: &DescriptorUpdateTemplate,
+        layout: &PipelineLayout,
+        set: u32,
+        data: &[vk::DescriptorBufferInfo],
+    ) {
+        unsafe {
+            self.push_descriptor.cmd_push_descriptor_set_with_template(
+                command_buffer,
+                update_template.vk_descriptor_update_template(),
+                layout.vk_pipeline_layout(),
+                set,
+                data.as_ptr().cast(),
+            );
+        }
+    }
+
     pub fn create_graphics_pipeline(
         &mut self,
         pipeline_layout: PipelineLayout,
@@ -809,6 +828,71 @@ impl CendreInstance {
             self.device
                 .cmd_set_scissor(command_buffer, 0, std::slice::from_ref(&scissor));
         };
+    }
+
+    pub fn draw_mesh_tasks(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        task_count: u32,
+        first_task: u32,
+    ) {
+        unsafe {
+            self.mesh_shader
+                .cmd_draw_mesh_tasks(command_buffer, task_count, first_task);
+        }
+    }
+
+    pub fn bind_index_buffer(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        buffer: &Buffer,
+        offset: vk::DeviceSize,
+        index_type: vk::IndexType,
+    ) {
+        unsafe {
+            self.device.cmd_bind_index_buffer(
+                command_buffer,
+                buffer.vk_buffer(),
+                offset,
+                index_type,
+            );
+        }
+    }
+
+    pub fn draw_indexed(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        index_count: u32,
+        instance_count: u32,
+        first_index: u32,
+        vertex_offset: i32,
+        first_instance: u32,
+    ) {
+        unsafe {
+            self.device.cmd_draw_indexed(
+                command_buffer,
+                index_count,
+                instance_count,
+                first_index,
+                vertex_offset,
+                first_instance,
+            );
+        }
+    }
+
+    pub fn bind_pipeline(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        pipeline_bind_point: vk::PipelineBindPoint,
+        pipeline: &Pipeline,
+    ) {
+        unsafe {
+            self.device.cmd_bind_pipeline(
+                command_buffer,
+                pipeline_bind_point,
+                pipeline.vk_pipeline(),
+            );
+        }
     }
 }
 
