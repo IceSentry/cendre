@@ -6,7 +6,7 @@ use bytemuck::cast_slice;
 
 use crate::instance::{Buffer, CendreInstance};
 
-const TRIANGLE_COUNT: usize = 126;
+const MAX_TRIANGLE_COUNT: usize = 126;
 
 #[repr(C)]
 #[derive(Copy, Clone, Default, bytemuck::Zeroable, Debug)]
@@ -47,7 +47,7 @@ pub fn optimize_mesh(vertices: &[Vertex], indices: &[u32]) -> Mesh {
 #[derive(Copy, Clone)]
 pub struct Meshlet {
     pub vertices: [u32; 64],
-    pub indices: [u8; TRIANGLE_COUNT * 3],
+    pub indices: [u8; MAX_TRIANGLE_COUNT * 3],
     pub triangle_count: u8,
     pub vertex_count: u8,
 }
@@ -56,7 +56,7 @@ impl Default for Meshlet {
     fn default() -> Self {
         Self {
             vertices: [0; 64],
-            indices: [0; TRIANGLE_COUNT * 3],
+            indices: [0; MAX_TRIANGLE_COUNT * 3],
             triangle_count: 0,
             vertex_count: 0,
         }
@@ -88,7 +88,7 @@ fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> Vec<Meshlet> {
             + u8::from(meshlet_vertices[*b as usize] == 0xFF)
             + u8::from(meshlet_vertices[*c as usize] == 0xFF)
             > 64
-            || meshlet.triangle_count >= TRIANGLE_COUNT as u8
+            || meshlet.triangle_count >= MAX_TRIANGLE_COUNT as u8
         {
             meshlets.push(meshlet);
             for i in 0..meshlet.vertex_count {
