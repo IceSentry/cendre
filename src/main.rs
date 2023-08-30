@@ -9,6 +9,7 @@
 #![allow(clippy::missing_errors_doc)]
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::type_complexity)]
+#![allow(clippy::too_many_lines)]
 
 use std::time::{Duration, Instant};
 
@@ -98,66 +99,23 @@ fn init_cendre(
     let mut cendre = CendreInstance::init(winit_window);
     info!("Instance created");
 
-    let vertex_shader = cendre.load_shader(
-        "assets/shaders/mesh.vert.wgsl",
-        "vertex",
-        vk::ShaderStageFlags::VERTEX,
-    );
-    let fragment_shader = cendre.load_shader(
-        "assets/shaders/mesh.frag.wgsl",
-        "fragment",
-        vk::ShaderStageFlags::FRAGMENT,
-    );
-
-    let descriptor_stride = std::mem::size_of::<vk::DescriptorBufferInfo>();
-
-    warn!("offset: {}", descriptor_stride);
+    let vertex_shader = cendre.load_shader("assets/shaders/mesh.vert.wgsl");
+    let fragment_shader = cendre.load_shader("assets/shaders/mesh.frag.wgsl");
 
     if cendre.rtx_supported {
-        let mesh_shader = cendre.load_shader(
-            "assets/shaders/meshlet.mesh.glsl",
-            "main",
-            vk::ShaderStageFlags::MESH_NV,
-        );
-        let bindings = [
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(0)
-                .descriptor_count(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .stage_flags(vk::ShaderStageFlags::MESH_NV),
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(1)
-                .descriptor_count(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .stage_flags(vk::ShaderStageFlags::MESH_NV),
-        ];
-        #[allow(clippy::erasing_op)]
-        #[allow(clippy::identity_op)]
-        let entries = [
-            vk::DescriptorUpdateTemplateEntry::default()
-                .dst_binding(0)
-                .dst_array_element(0)
-                .descriptor_count(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .offset(descriptor_stride * 0)
-                .stride(descriptor_stride),
-            vk::DescriptorUpdateTemplateEntry::default()
-                .dst_binding(1)
-                .dst_array_element(0)
-                .descriptor_count(1)
-                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .offset(descriptor_stride * 1)
-                .stride(descriptor_stride),
-        ];
+        let mesh_shader = cendre.load_shader("assets/shaders/meshlet.mesh.glsl");
 
-        let mesh_layout_rtx = cendre.create_pipeline_layout(&bindings).unwrap();
+        let mesh_layout_rtx = cendre
+            .create_pipeline_layout(&mesh_shader, &fragment_shader)
+            .unwrap();
 
         let mesh_update_template_rtx = cendre
             .create_update_template(
                 vk::PipelineBindPoint::GRAPHICS,
                 DescriptorUpdateTemplateType::PUSH_DESCRIPTORS_KHR,
                 &mesh_layout_rtx,
-                &entries,
+                &mesh_shader,
+                &fragment_shader,
             )
             .unwrap();
         commands.insert_resource(CendreMeshUpdateTemplateRTX(mesh_update_template_rtx));
@@ -177,27 +135,16 @@ fn init_cendre(
         commands.insert_resource(CendrePipelineRTX(pipeline_rtx));
     }
 
-    let bindings = [vk::DescriptorSetLayoutBinding::default()
-        .binding(0)
-        .descriptor_count(1)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .stage_flags(vk::ShaderStageFlags::VERTEX)];
-    #[allow(clippy::erasing_op)]
-    #[allow(clippy::identity_op)]
-    let entries = [vk::DescriptorUpdateTemplateEntry::default()
-        .dst_binding(0)
-        .dst_array_element(0)
-        .descriptor_count(1)
-        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-        .offset(descriptor_stride * 0)
-        .stride(descriptor_stride)];
-    let mesh_layout = cendre.create_pipeline_layout(&bindings).unwrap();
+    let mesh_layout = cendre
+        .create_pipeline_layout(&vertex_shader, &fragment_shader)
+        .unwrap();
     let mesh_update_template = cendre
         .create_update_template(
             vk::PipelineBindPoint::GRAPHICS,
             DescriptorUpdateTemplateType::PUSH_DESCRIPTORS_KHR,
             &mesh_layout,
-            &entries,
+            &vertex_shader,
+            &fragment_shader,
         )
         .unwrap();
     commands.insert_resource(CendreMeshUpdateTemplate(mesh_update_template));

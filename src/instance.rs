@@ -24,7 +24,9 @@ use gpu_allocator::{
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 use crate::{
-    c_char_buf_to_string, image_barrier, shaders::load_vk_shader_module, swapchain::CendreSwapchain,
+    c_char_buf_to_string, image_barrier,
+    shaders::{compile_shader, create_shader_module, parse_spirv, Shader},
+    swapchain::CendreSwapchain,
 };
 
 pub struct Buffer {
@@ -105,22 +107,6 @@ impl Pipeline {
     #[must_use]
     pub fn vk_pipeline(&self) -> vk::Pipeline {
         *self.vk_pipeline.lock().unwrap()
-    }
-}
-
-pub struct Shader {
-    vk_shader_module: Arc<Mutex<vk::ShaderModule>>,
-    pub entry_point: CString,
-    pub stage: vk::ShaderStageFlags,
-}
-
-impl Shader {
-    #[must_use]
-    pub fn create_info(&self) -> vk::PipelineShaderStageCreateInfo {
-        vk::PipelineShaderStageCreateInfo::default()
-            .stage(self.stage)
-            .module(*self.vk_shader_module.lock().unwrap())
-            .name(&self.entry_point)
     }
 }
 
@@ -450,31 +436,54 @@ impl CendreInstance {
         }
     }
 
-    pub fn load_shader(
-        &mut self,
-        path: &str,
-        entry_point: &str,
-        stage: vk::ShaderStageFlags,
-    ) -> Shader {
-        let vk_shader_module = load_vk_shader_module(&self.device, path).unwrap();
+    pub fn load_shader(&mut self, path: &str) -> Shader {
+        let spv = compile_shader(path).expect("Failed to compile shader");
+
+        let parse_info = parse_spirv(&spv).expect("Failed to parse spirv");
+
+        let vk_shader_module = create_shader_module(&self.device, spv)
+            .expect("Failed to create shader module from spirv");
         let vk_shader_module = Arc::new(Mutex::new(vk_shader_module));
         self.shader_modules.push(vk_shader_module.clone());
-        let entry_point = CString::new(entry_point).unwrap();
+        let entry_point = CString::new(parse_info.entry_point).unwrap();
         Shader {
             vk_shader_module,
             entry_point,
-            stage,
+            stage: parse_info.stage,
+            storage_buffer_mask: parse_info.storage_buffer_mask,
         }
     }
 
     pub fn create_pipeline_layout(
         &mut self,
-        bindings: &[vk::DescriptorSetLayoutBinding],
+        vertex_shader: &Shader,
+        fragment_shader: &Shader,
     ) -> anyhow::Result<PipelineLayout> {
+        let storage_mask = vertex_shader.storage_buffer_mask | fragment_shader.storage_buffer_mask;
+        let mut bindings = vec![];
+        for i in 0..32 {
+            if storage_mask & (1 << i) > 0 {
+                let mut stage_flags = vk::ShaderStageFlags::empty();
+                if vertex_shader.storage_buffer_mask & (1 << i) > 0 {
+                    stage_flags |= vertex_shader.stage;
+                }
+                if fragment_shader.storage_buffer_mask & (1 << i) > 0 {
+                    stage_flags |= fragment_shader.stage;
+                }
+                bindings.push(
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(i)
+                        .descriptor_count(1)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .stage_flags(stage_flags),
+                );
+            }
+        }
+
         let set_layout = unsafe {
             let create_info = vk::DescriptorSetLayoutCreateInfo::default()
                 .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR)
-                .bindings(bindings);
+                .bindings(&bindings);
             self.device
                 .create_descriptor_set_layout(&create_info, None)?
         };
@@ -501,10 +510,27 @@ impl CendreInstance {
         bind_point: vk::PipelineBindPoint,
         template_type: DescriptorUpdateTemplateType,
         layout: &PipelineLayout,
-        entries: &[vk::DescriptorUpdateTemplateEntry],
+        vertex_shader: &Shader,
+        fragment_shader: &Shader,
     ) -> anyhow::Result<DescriptorUpdateTemplate> {
+        let descriptor_stride = std::mem::size_of::<vk::DescriptorBufferInfo>();
+        let storage_mask = vertex_shader.storage_buffer_mask | fragment_shader.storage_buffer_mask;
+        let mut entries = vec![];
+        for i in 0..32 {
+            if storage_mask & (1 << i) > 0 {
+                entries.push(
+                    vk::DescriptorUpdateTemplateEntry::default()
+                        .dst_binding(i)
+                        .dst_array_element(0)
+                        .descriptor_count(1)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .offset(descriptor_stride * i as usize)
+                        .stride(descriptor_stride),
+                );
+            }
+        }
         let create_info = vk::DescriptorUpdateTemplateCreateInfo::default()
-            .descriptor_update_entries(entries)
+            .descriptor_update_entries(&entries)
             .template_type(template_type)
             .pipeline_bind_point(bind_point)
             .pipeline_layout(layout.vk_pipeline_layout());
