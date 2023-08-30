@@ -56,6 +56,52 @@ fn compile_wgsl(file_name: &str, source: &str) -> Vec<u32> {
     .unwrap()
 }
 
+// This doesn't work because naga doesn't support uint8_t
+fn _compile_glsl_naga(file_name: &str, source: &str) -> Vec<u32> {
+    let mut frontend = naga::front::glsl::Frontend::default();
+    let module = match frontend.parse(
+        &naga::front::glsl::Options {
+            stage: if file_name.contains(".vert") {
+                naga::ShaderStage::Vertex
+            } else if file_name.contains(".frag") {
+                naga::ShaderStage::Fragment
+            } else if file_name.contains(".mesh") {
+                naga::ShaderStage::Mesh
+            } else {
+                todo!()
+            },
+            defines: std::collections::HashMap::default(),
+        },
+        source,
+    ) {
+        Ok(module) => module,
+        Err(err) => {
+            error!("{file_name}: {err:?}");
+            panic!("Invalid glsl shader {file_name}");
+        }
+    };
+
+    let module_info =
+        match Validator::new(ValidationFlags::default(), Capabilities::all()).validate(&module) {
+            Ok(module_info) => module_info,
+            Err(err) => {
+                error!("{file_name}: {err}");
+                panic!("Shader validation error for {file_name}");
+            }
+        };
+
+    naga::back::spv::write_vec(
+        &module,
+        &module_info,
+        &naga::back::spv::Options {
+            flags: naga::back::spv::WriterFlags::empty(),
+            ..naga::back::spv::Options::default()
+        },
+        None,
+    )
+    .unwrap()
+}
+
 fn compile_glsl(file_name: &str, source: &str) -> Vec<u32> {
     let compiler = shaderc::Compiler::new().unwrap();
     let options = shaderc::CompileOptions::new().unwrap();
