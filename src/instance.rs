@@ -471,7 +471,13 @@ impl CendreInstance {
         &mut self,
         bindings: &[vk::DescriptorSetLayoutBinding],
     ) -> anyhow::Result<PipelineLayout> {
-        let set_layout = unsafe { self.create_set_layout(bindings)? };
+        let set_layout = unsafe {
+            let create_info = vk::DescriptorSetLayoutCreateInfo::default()
+                .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR)
+                .bindings(bindings);
+            self.device
+                .create_descriptor_set_layout(&create_info, None)?
+        };
 
         let create_info =
             vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&set_layout));
@@ -490,39 +496,19 @@ impl CendreInstance {
         })
     }
 
-    /// # Safety
-    /// Make sure the device outlives the layout
-    unsafe fn create_set_layout(
-        &mut self,
-        bindings: &[vk::DescriptorSetLayoutBinding],
-    ) -> anyhow::Result<vk::DescriptorSetLayout> {
-        let create_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR)
-            .bindings(bindings);
-        Ok(self
-            .device
-            .create_descriptor_set_layout(&create_info, None)?)
-    }
-
     pub fn create_update_template(
         &mut self,
         bind_point: vk::PipelineBindPoint,
         template_type: DescriptorUpdateTemplateType,
         layout: &PipelineLayout,
-        bindings: &[vk::DescriptorSetLayoutBinding],
         entries: &[vk::DescriptorUpdateTemplateEntry],
     ) -> anyhow::Result<DescriptorUpdateTemplate> {
-        // println!("bindings {bindings:#?}");
-        // println!("entries {entries:#?}");
-
-        let set_layout = unsafe { self.create_set_layout(bindings)? };
         let create_info = vk::DescriptorUpdateTemplateCreateInfo::default()
             .descriptor_update_entries(entries)
             .template_type(template_type)
-            .descriptor_set_layout(set_layout)
             .pipeline_bind_point(bind_point)
             .pipeline_layout(layout.vk_pipeline_layout());
-        // println!("{create_info:?}");
+
         let update_template = unsafe {
             self.device
                 .create_descriptor_update_template(&create_info, None)?
@@ -531,8 +517,6 @@ impl CendreInstance {
         let update_template = Arc::new(Mutex::new(update_template));
         self.descriptor_update_templates
             .push(update_template.clone());
-
-        unsafe { self.device.destroy_descriptor_set_layout(set_layout, None) };
 
         Ok(DescriptorUpdateTemplate {
             vk_descriptor_update_template: update_template,

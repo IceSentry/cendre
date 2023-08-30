@@ -157,7 +157,6 @@ fn init_cendre(
                 vk::PipelineBindPoint::GRAPHICS,
                 DescriptorUpdateTemplateType::PUSH_DESCRIPTORS_KHR,
                 &mesh_layout_rtx,
-                &bindings,
                 &entries,
             )
             .unwrap();
@@ -198,7 +197,6 @@ fn init_cendre(
             vk::PipelineBindPoint::GRAPHICS,
             DescriptorUpdateTemplateType::PUSH_DESCRIPTORS_KHR,
             &mesh_layout,
-            &bindings,
             &entries,
         )
         .unwrap();
