@@ -22,7 +22,6 @@ unsafe impl bytemuck::Pod for Vertex {}
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
-    pub prepared: bool,
 }
 
 pub fn optimize_mesh(vertices: &[Vertex], indices: &[u32]) -> Mesh {
@@ -36,11 +35,7 @@ pub fn optimize_mesh(vertices: &[Vertex], indices: &[u32]) -> Mesh {
     let mut indices = meshopt::optimize_vertex_cache(&indices, vertices.len());
     let vertices = meshopt::optimize_vertex_fetch(&mut indices, &vertices);
 
-    Mesh {
-        vertices,
-        indices,
-        prepared: false,
-    }
+    Mesh { vertices, indices }
 }
 
 #[repr(C)]
@@ -147,7 +142,6 @@ pub fn prepare_mesh(
     meshes: Query<(Entity, &Mesh), Without<PreparedMesh>>,
 ) {
     for (entity, mesh) in &meshes {
-        if !mesh.prepared {
             info!("preparing mesh");
             let start = Instant::now();
 
@@ -221,6 +215,5 @@ pub fn prepare_mesh(
 
             entity_cmd.insert(PreparedMesh);
             info!("mesh prepared in {}ms", start.elapsed().as_millis());
-        }
     }
 }
