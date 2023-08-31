@@ -4,31 +4,16 @@
 #extension GL_EXT_shader_8bit_storage: require
 #extension GL_NV_mesh_shader: require
 
+#include "mesh.h"
+
 #define DEBUG 0
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 126) out;
 
-struct Vertex
-{
-	float vx, vy, vz, vw;
-	uint8_t nx, ny, nz, nw;
-	float tu, tv;
-};
-
 layout(binding = 0) readonly buffer Vertices
 {
 	Vertex vertices[];
-};
-
-struct Meshlet
-{
-	// for some reason using `vec4` doesn't seem to work but using an array works
-	float cone[4];
-	uint vertices[64];
-	uint8_t indices[126*3];
-	uint8_t triangleCount;
-	uint8_t vertexCount;
 };
 
 layout(binding = 1) readonly buffer Meshlets

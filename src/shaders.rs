@@ -13,6 +13,7 @@ use ash::{
 };
 use bevy::prelude::*;
 use naga::valid::{Capabilities, ValidationFlags, Validator};
+use shaderc::ResolvedInclude;
 
 pub struct Shader {
     pub vk_shader_module: Arc<Mutex<vk::ShaderModule>>,
@@ -255,7 +256,17 @@ fn _compile_glsl_naga(file_name: &str, source: &str) -> Vec<u32> {
 
 fn compile_glsl(file_name: &str, source: &str) -> Vec<u32> {
     let compiler = shaderc::Compiler::new().unwrap();
-    let options = shaderc::CompileOptions::new().unwrap();
+    let mut options = shaderc::CompileOptions::new().unwrap();
+    options.set_include_callback(|a, _, _, _| {
+        // WARN this assumes flat imports and that imports are always inside assets/shaders/
+        let path = format!("assets/shaders/{a}");
+        let content = std::fs::read_to_string(path.clone())
+            .expect("Tried to include a file that isn't in assets/shaders/");
+        Ok(ResolvedInclude {
+            resolved_name: path,
+            content,
+        })
+    });
     let shader_kind = if file_name.contains(".vert") {
         shaderc::ShaderKind::Vertex
     } else if file_name.contains(".frag") {
