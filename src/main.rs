@@ -101,8 +101,8 @@ fn init_cendre(
     let mut cendre = CendreInstance::init(winit_window);
     info!("Instance created");
 
-    let vertex_shader = cendre.load_shader("assets/shaders/mesh.vert.wgsl");
-    let fragment_shader = cendre.load_shader("assets/shaders/mesh.frag.wgsl");
+    let vertex_shader = cendre.load_shader("assets/shaders/mesh.vert.glsl");
+    let fragment_shader = cendre.load_shader("assets/shaders/mesh.frag.glsl");
 
     let pipeline_rasterization_state_create_info =
         vk::PipelineRasterizationStateCreateInfo::default()

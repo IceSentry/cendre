@@ -1,0 +1,26 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage: require
+#extension GL_EXT_shader_8bit_storage: require
+
+#include "mesh.h"
+
+layout(binding = 0) readonly buffer Vertices {
+	Vertex vertices[];
+};
+
+layout(location = 0) out vec4 color;
+
+void main() {
+	vec3 position = vec3(vertices[gl_VertexIndex].vx, vertices[gl_VertexIndex].vy, vertices[gl_VertexIndex].vz);
+	vec3 normal = vec3(int(vertices[gl_VertexIndex].nx), int(vertices[gl_VertexIndex].ny), int(vertices[gl_VertexIndex].nz));
+    normal = normal / 127.0 - 1.0;
+	vec2 texcoord = vec2(vertices[gl_VertexIndex].tu, vertices[gl_VertexIndex].tv);
+
+    vec3 offset = vec3(0.25, -0.75, 0.5);
+    vec3 scale = vec3(1.0, 1.0, 0.5);
+
+	gl_Position = vec4(position * scale + offset, 1.0);
+
+	color = vec4(normal * 0.5 + vec3(0.5), 1.0);
+}
