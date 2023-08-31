@@ -456,19 +456,20 @@ impl CendreInstance {
 
     pub fn create_pipeline_layout(
         &mut self,
-        vertex_shader: &Shader,
-        fragment_shader: &Shader,
+        shaders: &[&Shader],
     ) -> anyhow::Result<PipelineLayout> {
-        let storage_mask = vertex_shader.storage_buffer_mask | fragment_shader.storage_buffer_mask;
+        let mut storage_mask = 0;
+        for shader in shaders {
+            storage_mask |= shader.storage_buffer_mask;
+        }
         let mut bindings = vec![];
         for i in 0..32 {
             if storage_mask & (1 << i) > 0 {
                 let mut stage_flags = vk::ShaderStageFlags::empty();
-                if vertex_shader.storage_buffer_mask & (1 << i) > 0 {
-                    stage_flags |= vertex_shader.stage;
-                }
-                if fragment_shader.storage_buffer_mask & (1 << i) > 0 {
-                    stage_flags |= fragment_shader.stage;
+                for shader in shaders {
+                    if shader.storage_buffer_mask & (1 << i) > 0 {
+                        stage_flags |= shader.stage;
+                    }
                 }
                 bindings.push(
                     vk::DescriptorSetLayoutBinding::default()
@@ -510,11 +511,15 @@ impl CendreInstance {
         bind_point: vk::PipelineBindPoint,
         template_type: DescriptorUpdateTemplateType,
         layout: &PipelineLayout,
-        vertex_shader: &Shader,
-        fragment_shader: &Shader,
+        shaders: &[&Shader],
     ) -> anyhow::Result<DescriptorUpdateTemplate> {
         let descriptor_stride = std::mem::size_of::<vk::DescriptorBufferInfo>();
-        let storage_mask = vertex_shader.storage_buffer_mask | fragment_shader.storage_buffer_mask;
+
+        let mut storage_mask = 0;
+        for shader in shaders {
+            storage_mask |= shader.storage_buffer_mask;
+        }
+
         let mut entries = vec![];
         for i in 0..32 {
             if storage_mask & (1 << i) > 0 {
