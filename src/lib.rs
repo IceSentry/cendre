@@ -10,6 +10,7 @@
 #![allow(clippy::missing_panics_doc)]
 #![allow(clippy::type_complexity)]
 #![allow(clippy::too_many_lines)]
+#![allow(clippy::identity_op)]
 
 pub mod instance;
 pub mod mesh;

@@ -4,7 +4,7 @@
 #extension GL_EXT_shader_8bit_storage: require
 #extension GL_NV_mesh_shader: require
 
-#define DEBUG 1
+#define DEBUG 0
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 126) out;
@@ -23,6 +23,8 @@ layout(binding = 0) readonly buffer Vertices
 
 struct Meshlet
 {
+	// for some reason using `vec4` doesn't seem to work but using an array works
+	float cone[4];
 	uint vertices[64];
 	uint8_t indices[126*3];
 	uint8_t triangleCount;
@@ -36,8 +38,7 @@ layout(binding = 1) readonly buffer Meshlets
 
 layout(location = 0) out vec4 color[];
 
-uint hash(uint a)
-{
+uint hash(uint a) {
 	a = (a+0x7ed55d16) + (a<<12);
 	a = (a^0xc761c23c) ^ (a>>19);
 	a = (a+0x165667b1) + (a<<5);
@@ -47,10 +48,22 @@ uint hash(uint a)
 	return a;
 }
 
-void main()
-{
+bool cone_cull(vec4 cone, vec3 view) {
+	return dot(cone.xyz, view) > cone.w;
+}
+
+void main() {
 	uint mi = gl_WorkGroupID.x;
 	uint ti = gl_LocalInvocationID.x; // thread index
+
+	vec4 cone = vec4(meshlets[mi].cone[0], meshlets[mi].cone[1], meshlets[mi].cone[2], meshlets[mi].cone[3]);
+
+	if (cone_cull(cone, vec3(0, 0, 1))) {
+		if (ti == 0) {
+			gl_PrimitiveCountNV = 0;
+		}
+		return;
+	}
 
 #if DEBUG
 	uint mhash = hash(mi);

@@ -21,7 +21,7 @@ use bevy::{
     input::InputPlugin,
     log::LogPlugin,
     prelude::*,
-    window::{PresentMode, WindowResized},
+    window::WindowResized,
     winit::{WinitPlugin, WinitWindows},
 };
 use cendre::{
@@ -41,7 +41,9 @@ fn main() {
             WindowPlugin {
                 primary_window: Some(Window {
                     title: "cendre".into(),
-                    present_mode: PresentMode::AutoNoVsync,
+                    // For some reason it seems like this is being ignored?
+                    // present_mode: PresentMode::AutoVsync,
+                    // present_mode: PresentMode::AutoNoVsync,
                     ..default()
                 }),
                 ..default()
@@ -102,6 +104,13 @@ fn init_cendre(
     let vertex_shader = cendre.load_shader("assets/shaders/mesh.vert.wgsl");
     let fragment_shader = cendre.load_shader("assets/shaders/mesh.frag.wgsl");
 
+    let pipeline_rasterization_state_create_info =
+        vk::PipelineRasterizationStateCreateInfo::default()
+            .polygon_mode(vk::PolygonMode::FILL)
+            .front_face(vk::FrontFace::CLOCKWISE)
+            .cull_mode(vk::CullModeFlags::BACK)
+            .line_width(1.0);
+
     if cendre.rtx_supported {
         let mesh_shader = cendre.load_shader("assets/shaders/meshlet.mesh.glsl");
 
@@ -124,11 +133,7 @@ fn init_cendre(
                 cendre.render_pass,
                 &[mesh_shader.create_info(), fragment_shader.create_info()],
                 vk::PrimitiveTopology::TRIANGLE_LIST,
-                vk::PipelineRasterizationStateCreateInfo::default()
-                    .polygon_mode(vk::PolygonMode::FILL)
-                    .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-                    .cull_mode(vk::CullModeFlags::BACK)
-                    .line_width(1.0),
+                pipeline_rasterization_state_create_info,
             )
             .expect("Failed to create graphics pipeline RTX");
         commands.insert_resource(CendrePipelineRTX(pipeline_rtx));
@@ -153,11 +158,7 @@ fn init_cendre(
             cendre.render_pass,
             &[vertex_shader.create_info(), fragment_shader.create_info()],
             vk::PrimitiveTopology::TRIANGLE_LIST,
-            vk::PipelineRasterizationStateCreateInfo::default()
-                .polygon_mode(vk::PolygonMode::FILL)
-                .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-                .cull_mode(vk::CullModeFlags::BACK)
-                .line_width(1.0),
+            pipeline_rasterization_state_create_info,
         )
         .expect("Failed to create graphics pipeline");
 
@@ -238,8 +239,8 @@ fn update(
         };
         cendre.bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-        // let draw_count = 2000;
-        let draw_count = 1;
+        let draw_count = 2000;
+        // let draw_count = 1;
 
         for (mesh, vb, ib, mb, meshlets_count) in &meshes {
             let indices = &mesh.indices;

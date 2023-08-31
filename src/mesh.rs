@@ -38,9 +38,9 @@ pub fn optimize_mesh(vertices: &[Vertex], indices: &[u32]) -> Mesh {
     Mesh { vertices, indices }
 }
 
-#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct Meshlet {
+    pub cone: [f32; 4],
     pub vertices: [u32; 64],
     pub indices: [u8; MAX_TRIANGLE_COUNT * 3],
     pub triangle_count: u8,
@@ -50,6 +50,7 @@ pub struct Meshlet {
 impl Default for Meshlet {
     fn default() -> Self {
         Self {
+            cone: [0.0, 0.0, 0.0, 0.0],
             vertices: [0; 64],
             indices: [0; MAX_TRIANGLE_COUNT * 3],
             triangle_count: 0,
@@ -62,6 +63,7 @@ impl Meshlet {
     #[must_use]
     pub fn bytes(&self) -> Vec<u8> {
         let mut data = vec![];
+        data.extend_from_slice(cast_slice(&self.cone));
         data.extend_from_slice(cast_slice(&self.vertices));
         data.extend_from_slice(cast_slice(&self.indices));
         data.push(self.triangle_count);
@@ -123,6 +125,63 @@ fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> Vec<Meshlet> {
     meshlets
 }
 
+fn build_meshlet_cone(mesh: &Mesh, meshlets: &mut Vec<Meshlet>) {
+    for meshlet in meshlets {
+        let mut normals = vec![Vec3::ZERO; meshlet.triangle_count as usize];
+
+        for i in 0..meshlet.triangle_count {
+            let i = i as usize;
+            let a = meshlet.indices[i * 3 + 0] as usize;
+            let b = meshlet.indices[i * 3 + 1] as usize;
+            let c = meshlet.indices[i * 3 + 2] as usize;
+
+            let va = mesh.vertices[meshlet.vertices[a] as usize];
+            let vb = mesh.vertices[meshlet.vertices[b] as usize];
+            let vc = mesh.vertices[meshlet.vertices[c] as usize];
+
+            let p0 = Vec3::new(va.pos[0], va.pos[1], va.pos[2]);
+            let p1 = Vec3::new(vb.pos[0], vb.pos[1], vb.pos[2]);
+            let p2 = Vec3::new(vc.pos[0], vc.pos[1], vc.pos[2]);
+
+            let p10 = p1 - p0;
+            let p20 = p2 - p0;
+
+            let normal = p10.cross(p20);
+
+            normals[i] = normal * normal.length_recip();
+        }
+
+        let mut avgnormal = Vec3::ZERO;
+        for n in &normals {
+            avgnormal += *n;
+        }
+        if avgnormal.length() == 0.0 {
+            avgnormal.x = 1.0;
+            avgnormal.y = 0.0;
+            avgnormal.z = 0.0;
+        } else {
+            avgnormal /= avgnormal.length();
+        }
+
+        let mut mindp: f32 = 1.0;
+        assert_eq!(normals.len(), meshlet.triangle_count as usize);
+        for n in normals {
+            let dp = n.dot(avgnormal);
+            mindp = mindp.min(dp);
+        }
+
+        let conew = if mindp <= 0.0 {
+            1.0
+        } else {
+            (1.0 - mindp * mindp).sqrt()
+        };
+        meshlet.cone[0] = avgnormal[0];
+        meshlet.cone[1] = avgnormal[1];
+        meshlet.cone[2] = avgnormal[2];
+        meshlet.cone[3] = conew;
+    }
+}
+
 #[derive(Component, Deref)]
 pub struct VertexBuffer(pub Buffer);
 #[derive(Component, Deref)]
@@ -142,23 +201,74 @@ pub fn prepare_mesh(
     meshes: Query<(Entity, &Mesh), Without<PreparedMesh>>,
 ) {
     for (entity, mesh) in &meshes {
-            info!("preparing mesh");
-            let start = Instant::now();
+        info!("preparing mesh");
+        let start = Instant::now();
 
-            let vertex_buffer_data = cast_slice(&mesh.vertices);
-            let index_buffer_data = cast_slice(&mesh.indices);
+        let vertex_buffer_data = cast_slice(&mesh.vertices);
+        let index_buffer_data = cast_slice(&mesh.indices);
 
-            let mut entity_cmd = commands.entity(entity);
+        let mut entity_cmd = commands.entity(entity);
 
-            let mut scratch_buffer = cendre
-                .create_buffer(
-                    128 * 1024 * 1024,
-                    vk::BufferUsageFlags::TRANSFER_SRC,
-                    gpu_allocator::MemoryLocation::CpuToGpu,
-                )
-                .unwrap();
+        let mut scratch_buffer = cendre
+            .create_buffer(
+                128 * 1024 * 1024,
+                vk::BufferUsageFlags::TRANSFER_SRC,
+                gpu_allocator::MemoryLocation::CpuToGpu,
+            )
+            .unwrap();
 
-            let vertex_buffer = cendre
+        let vertex_buffer = cendre
+            .create_buffer(
+                128 * 1024 * 1024,
+                vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER,
+                gpu_allocator::MemoryLocation::GpuOnly,
+            )
+            .unwrap();
+        cendre.updload_buffer(
+            cendre.command_buffers[0],
+            &mut scratch_buffer,
+            &vertex_buffer,
+            vertex_buffer_data,
+        );
+        entity_cmd.insert(VertexBuffer(vertex_buffer));
+
+        let index_buffer = cendre
+            .create_buffer(
+                128 * 1024 * 1024,
+                vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER,
+                gpu_allocator::MemoryLocation::GpuOnly,
+            )
+            .unwrap();
+        cendre.updload_buffer(
+            cendre.command_buffers[0],
+            &mut scratch_buffer,
+            &index_buffer,
+            index_buffer_data,
+        );
+        entity_cmd.insert(IndexBuffer(index_buffer));
+
+        if cendre.rtx_supported {
+            // TODO build meshlets on load
+            let mut meshlets = build_meshlets(&mesh.vertices, &mesh.indices);
+            info!("Meshlets: {}", meshlets.len());
+
+            build_meshlet_cone(mesh, &mut meshlets);
+
+            let mut culled = 0;
+            for meshlet in &meshlets {
+                if meshlet.cone[2] > meshlet.cone[3] {
+                    culled += 1;
+                }
+            }
+            println!(
+                "Cullled meshlets: {culled}/{} {:.2}%",
+                meshlets.len(),
+                (culled as f32 / meshlets.len() as f32) * 100.0
+            );
+
+            let data = meshlets.iter().flat_map(Meshlet::bytes).collect::<Vec<_>>();
+
+            let meshlet_buffer = cendre
                 .create_buffer(
                     128 * 1024 * 1024,
                     vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -168,52 +278,16 @@ pub fn prepare_mesh(
             cendre.updload_buffer(
                 cendre.command_buffers[0],
                 &mut scratch_buffer,
-                &vertex_buffer,
-                vertex_buffer_data,
+                &meshlet_buffer,
+                &data,
             );
-            entity_cmd.insert(VertexBuffer(vertex_buffer));
+            entity_cmd.insert((
+                MeshletBuffer(meshlet_buffer),
+                MeshletsCount(meshlets.len() as u32),
+            ));
+        }
 
-            let index_buffer = cendre
-                .create_buffer(
-                    128 * 1024 * 1024,
-                    vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER,
-                    gpu_allocator::MemoryLocation::GpuOnly,
-                )
-                .unwrap();
-            cendre.updload_buffer(
-                cendre.command_buffers[0],
-                &mut scratch_buffer,
-                &index_buffer,
-                index_buffer_data,
-            );
-            entity_cmd.insert(IndexBuffer(index_buffer));
-
-            if cendre.rtx_supported {
-                // TODO build meshlets on load
-                let meshlets = build_meshlets(&mesh.vertices, &mesh.indices);
-                info!("Meshlets: {}", meshlets.len());
-                let data = meshlets.iter().flat_map(Meshlet::bytes).collect::<Vec<_>>();
-
-                let meshlet_buffer = cendre
-                    .create_buffer(
-                        128 * 1024 * 1024,
-                        vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER,
-                        gpu_allocator::MemoryLocation::GpuOnly,
-                    )
-                    .unwrap();
-                cendre.updload_buffer(
-                    cendre.command_buffers[0],
-                    &mut scratch_buffer,
-                    &meshlet_buffer,
-                    &data,
-                );
-                entity_cmd.insert((
-                    MeshletBuffer(meshlet_buffer),
-                    MeshletsCount(meshlets.len() as u32),
-                ));
-            }
-
-            entity_cmd.insert(PreparedMesh);
-            info!("mesh prepared in {}ms", start.elapsed().as_millis());
+        entity_cmd.insert(PreparedMesh);
+        info!("mesh prepared in {}ms", start.elapsed().as_millis());
     }
 }
