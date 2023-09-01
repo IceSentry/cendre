@@ -128,6 +128,7 @@ pub fn parse_spirv(code: &[u32]) -> anyhow::Result<ParseInfo> {
             ExecutionModel::Vertex => ShaderStageFlags::VERTEX,
             ExecutionModel::Fragment => ShaderStageFlags::FRAGMENT,
             ExecutionModel::MeshNV => ShaderStageFlags::MESH_NV,
+            ExecutionModel::TaskNV => ShaderStageFlags::TASK_NV,
             x => panic!("Unsupported execution model {x:?}"),
         };
         parse_info.entry_point = entry_point.operands[2].unwrap_literal_string().to_string();
@@ -261,6 +262,7 @@ fn _compile_glsl_naga(file_name: &str, source: &str) -> Vec<u32> {
 fn compile_glsl(file_name: &str, source: &str) -> Vec<u32> {
     let compiler = shaderc::Compiler::new().unwrap();
     let mut options = shaderc::CompileOptions::new().unwrap();
+    options.set_target_spirv(shaderc::SpirvVersion::V1_3);
     options.set_include_callback(|a, _, _, _| {
         // WARN this assumes flat imports and that imports are always inside assets/shaders/
         let path = format!("assets/shaders/{a}");
@@ -271,12 +273,15 @@ fn compile_glsl(file_name: &str, source: &str) -> Vec<u32> {
             content,
         })
     });
+
     let shader_kind = if file_name.contains(".vert") {
         shaderc::ShaderKind::Vertex
     } else if file_name.contains(".frag") {
         shaderc::ShaderKind::Fragment
     } else if file_name.contains(".mesh") {
         shaderc::ShaderKind::Mesh
+    } else if file_name.contains(".task") {
+        shaderc::ShaderKind::Task
     } else {
         todo!()
     };

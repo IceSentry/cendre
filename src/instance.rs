@@ -222,8 +222,9 @@ impl CendreInstance {
             .push_next(&mut features_16bit_storage)
             .push_next(&mut features_8bit_storage);
 
-        let mut mesh_shader_features_nv =
-            vk::PhysicalDeviceMeshShaderFeaturesNV::default().mesh_shader(true);
+        let mut mesh_shader_features_nv = vk::PhysicalDeviceMeshShaderFeaturesNV::default()
+            .mesh_shader(true)
+            .task_shader(true);
         if rtx_supported {
             device_create_info = device_create_info.push_next(&mut mesh_shader_features_nv);
         }
