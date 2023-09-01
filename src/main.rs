@@ -113,6 +113,7 @@ fn init_cendre(
 
     if cendre.rtx_supported {
         let mesh_shader = cendre.load_shader("assets/shaders/meshlet.mesh.glsl");
+        let task_shader = cendre.load_shader("assets/shaders/meshlet.task.glsl");
 
         let mesh_layout_rtx = cendre
             .create_pipeline_layout(&[&mesh_shader, &fragment_shader])
@@ -123,7 +124,7 @@ fn init_cendre(
                 vk::PipelineBindPoint::GRAPHICS,
                 DescriptorUpdateTemplateType::PUSH_DESCRIPTORS_KHR,
                 &mesh_layout_rtx,
-                &[&mesh_shader, &fragment_shader],
+                &[&task_shader, &mesh_shader, &fragment_shader],
             )
             .unwrap();
         commands.insert_resource(CendreMeshUpdateTemplateRTX(mesh_update_template_rtx));
@@ -131,7 +132,11 @@ fn init_cendre(
             .create_graphics_pipeline(
                 mesh_layout_rtx,
                 cendre.render_pass,
-                &[mesh_shader.create_info(), fragment_shader.create_info()],
+                &[
+                    task_shader.create_info(),
+                    mesh_shader.create_info(),
+                    fragment_shader.create_info(),
+                ],
                 vk::PrimitiveTopology::TRIANGLE_LIST,
                 pipeline_rasterization_state_create_info,
             )
@@ -263,7 +268,7 @@ fn update(
                 );
 
                 for _ in 0..draw_count {
-                    cendre.draw_mesh_tasks(command_buffer, meshlets_count.0, 0);
+                    cendre.draw_mesh_tasks(command_buffer, meshlets_count.0 / 32, 0);
                 }
             } else {
                 let descriptors = [vb.descriptor_info(0)];

@@ -20,6 +20,10 @@ layout(binding = 1) readonly buffer Meshlets {
 	Meshlet meshlets[];
 };
 
+in taskNV block {
+	uint meshlet_indices[32];
+};
+
 layout(location = 0) out vec4 color[];
 
 uint hash(uint a) {
@@ -37,7 +41,7 @@ bool cone_cull(vec4 cone, vec3 view) {
 }
 
 void main() {
-	uint mi = gl_WorkGroupID.x;
+	uint mi = meshlet_indices[gl_WorkGroupID.x];
 	uint ti = gl_LocalInvocationID.x; // thread index
 
 	vec4 cone = vec4(meshlets[mi].cone[0], meshlets[mi].cone[1], meshlets[mi].cone[2], meshlets[mi].cone[3]);

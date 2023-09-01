@@ -122,6 +122,12 @@ fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> Vec<Meshlet> {
         meshlets.push(meshlet);
     }
 
+    // TODO this isn't necessary, but it makes it so we can assume to always
+    // have 32 meshlets in the task shader
+    while meshlets.len() % 32 != 0 {
+        meshlets.push(Meshlet::default());
+    }
+
     meshlets
 }
 
