@@ -15,6 +15,7 @@ use bevy::prelude::*;
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 use shaderc::ResolvedInclude;
 
+#[derive(Clone)]
 pub struct Shader {
     pub vk_shader_module: Arc<Mutex<vk::ShaderModule>>,
     pub entry_point: CString,
@@ -43,6 +44,7 @@ pub fn compile_shader(path: &str) -> anyhow::Result<Vec<u32>> {
     let file_name = path_buf.file_name().unwrap().to_string_lossy();
 
     let start = Instant::now();
+    info!("Compiling {path}");
     let spv = match path_buf.extension().and_then(OsStr::to_str).unwrap() {
         "wgsl" => compile_wgsl(&file_name, &source),
         "glsl" => compile_glsl(&file_name, &source),
@@ -108,7 +110,9 @@ pub fn parse_spirv(code: &[u32]) -> anyhow::Result<ParseInfo> {
     use rspirv::{dr::Operand, spirv::*};
 
     let mut loader = rspirv::dr::Loader::new();
-    rspirv::binary::parse_words(code, &mut loader).unwrap();
+    if let Err(err) = rspirv::binary::parse_words(code, &mut loader) {
+        panic!("{err:#?}")
+    }
     let module = loader.module();
 
     let mut parse_info = ParseInfo {
@@ -278,7 +282,12 @@ fn compile_glsl(file_name: &str, source: &str) -> Vec<u32> {
     };
 
     match compiler.compile_into_spirv(source, shader_kind, file_name, "main", Some(&options)) {
-        Ok(result) => result.as_binary().to_vec(),
+        Ok(result) => {
+            if result.get_num_warnings() > 0 {
+                warn!("{}", result.get_warning_messages());
+            }
+            result.as_binary().to_vec()
+        }
         Err(err) => {
             error!("{err}");
             panic!("Invalid glsl shader {file_name}");

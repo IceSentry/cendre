@@ -108,7 +108,7 @@ fn init_cendre(
         vk::PipelineRasterizationStateCreateInfo::default()
             .polygon_mode(vk::PolygonMode::FILL)
             .front_face(vk::FrontFace::CLOCKWISE)
-            .cull_mode(vk::CullModeFlags::BACK)
+            .cull_mode(vk::CullModeFlags::FRONT)
             .line_width(1.0);
 
     if cendre.rtx_supported {
@@ -249,7 +249,7 @@ fn update(
                 let Some(mb) = mb else {
                     continue;
                 };
-                let Some(meshlets_count) = &meshlets_count else {
+                let Some(meshlets_count) = meshlets_count else {
                     continue;
                 };
 
@@ -299,9 +299,9 @@ fn update(
         let _span = bevy::utils::tracing::info_span!("update frame time").entered();
 
         let (frame_gpu_begin, frame_gpu_end) = cendre.get_frame_time();
-        *frame_gpu_avg = *frame_gpu_avg * 0.95 + (frame_gpu_end - frame_gpu_begin) * 0.05;
+        *frame_gpu_avg = *frame_gpu_avg * 0.9 + (frame_gpu_end - frame_gpu_begin) * 0.1;
         *frame_cpu_avg =
-            *frame_cpu_avg * 0.95 + (begin_frame.elapsed().as_secs_f64() * 1000.0) * 0.05;
+            *frame_cpu_avg * 0.9 + (begin_frame.elapsed().as_secs_f64() * 1000.0) * 0.1;
 
         window.title = format!(
             "cpu: {:.2}ms gpu: {:.2}ms RTX: {}",

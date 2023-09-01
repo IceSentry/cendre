@@ -3,6 +3,7 @@
 #extension GL_EXT_shader_16bit_storage: require
 #extension GL_EXT_shader_8bit_storage: require
 #extension GL_NV_mesh_shader: require
+#extension GL_GOOGLE_include_directive: require
 
 #include "mesh.h"
 
@@ -11,13 +12,11 @@
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 126) out;
 
-layout(binding = 0) readonly buffer Vertices
-{
+layout(binding = 0) readonly buffer Vertices {
 	Vertex vertices[];
 };
 
-layout(binding = 1) readonly buffer Meshlets
-{
+layout(binding = 1) readonly buffer Meshlets {
 	Meshlet meshlets[];
 };
 
@@ -52,7 +51,11 @@ void main() {
 
 #if DEBUG
 	uint mhash = hash(mi);
-	vec3 mcolor = vec3(float(mhash & 255), float((mhash >> 8) & 255), float((mhash >> 16) & 255)) / 255.0;
+	vec3 mcolor = vec3(
+		float(mhash & 255),
+		float((mhash >> 8) & 255),
+		float((mhash >> 16) & 255)
+	) / 255.0;
 #endif
 
 	uint vertexCount = uint(meshlets[mi].vertexCount);
@@ -61,7 +64,11 @@ void main() {
 		uint vi = meshlets[mi].vertices[i]; // vertex index
 
 		vec3 position = vec3(vertices[vi].vx, vertices[vi].vy, vertices[vi].vz);
-		vec3 normal = vec3(int(vertices[vi].nx), int(vertices[vi].ny), int(vertices[vi].nz)) / 127.0 - 1.0;
+		vec3 normal = vec3(
+			int(vertices[vi].nx),
+			int(vertices[vi].ny),
+			int(vertices[vi].nz)
+		) / 127.0 - 1.0;
 		vec2 texcoord = vec2(vertices[vi].tu, vertices[vi].tv);
 
 		vec3 offset = vec3(0.25, -0.75, 0.5);
