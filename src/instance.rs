@@ -145,7 +145,7 @@ pub struct CendreInstance {
 
 impl CendreInstance {
     #[allow(clippy::too_many_lines)]
-    pub fn init(winit_window: &winit::window::Window) -> Self {
+    pub fn init(winit_window: &winit::window::Window, present_mode: vk::PresentModeKHR) -> Self {
         let entry = Entry::linked();
         let instance =
             create_instance(&entry, "Cendre", winit_window).expect("Failed to create instance");
@@ -261,6 +261,7 @@ impl CendreInstance {
             winit_window.inner_size().height,
             render_pass,
             None,
+            present_mode,
         );
 
         info!("swapchain created");

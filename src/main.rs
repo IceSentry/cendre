@@ -32,6 +32,7 @@ use cendre::{
 };
 
 pub const OBJ_PATH: &str = "models/bunny.obj";
+pub const VSYNC: bool = true;
 
 fn main() {
     App::new()
@@ -100,7 +101,14 @@ fn init_cendre(
         .and_then(|window_id| winit_windows.get_window(window_id))
         .expect("Failed to get winit window");
 
-    let mut cendre = CendreInstance::init(winit_window);
+    let mut cendre = CendreInstance::init(
+        winit_window,
+        if VSYNC {
+            vk::PresentModeKHR::FIFO
+        } else {
+            vk::PresentModeKHR::IMMEDIATE
+        },
+    );
     info!("Instance created");
 
     let vertex_shader = cendre.load_shader("assets/shaders/mesh.vert.glsl");
@@ -353,6 +361,7 @@ fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreInsta
         new_width,
         new_height,
         cendre.render_pass,
+        cendre.swapchain.present_mode,
     );
 }
 

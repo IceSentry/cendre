@@ -13,6 +13,7 @@ pub struct CendreSwapchain {
     pub framebuffers: Vec<vk::Framebuffer>,
     pub width: u32,
     pub height: u32,
+    pub present_mode: vk::PresentModeKHR,
 }
 
 impl CendreSwapchain {
@@ -29,6 +30,7 @@ impl CendreSwapchain {
         height: u32,
         render_pass: vk::RenderPass,
         old_swapchain: Option<vk::SwapchainKHR>,
+        present_mode: vk::PresentModeKHR,
     ) -> Self {
         let surface_capabilities = unsafe {
             surface_loader
@@ -73,7 +75,7 @@ impl CendreSwapchain {
         .unwrap()
         .iter()
         .copied()
-        .find(|&mode| mode == vk::PresentModeKHR::IMMEDIATE)
+        .find(|&mode| mode == present_mode)
         .unwrap_or(vk::PresentModeKHR::FIFO);
 
         let mut swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
@@ -118,6 +120,7 @@ impl CendreSwapchain {
             framebuffers,
             width,
             height,
+            present_mode,
         }
     }
 
@@ -133,6 +136,7 @@ impl CendreSwapchain {
         width: u32,
         height: u32,
         render_pass: vk::RenderPass,
+        present_mode: vk::PresentModeKHR,
     ) -> Self {
         let new_swapchain = CendreSwapchain::new(
             device,
@@ -145,6 +149,7 @@ impl CendreSwapchain {
             height,
             render_pass,
             Some(self.swapchain),
+            present_mode,
         );
         unsafe { device.device_wait_idle().unwrap() };
         self.destroy(device, swapchain_loader);
