@@ -36,22 +36,11 @@ uint hash(uint a) {
 	return a;
 }
 
-bool cone_cull(vec4 cone, vec3 view) {
-	return dot(cone.xyz, view) > cone.w;
-}
-
 void main() {
+	// mesh index
 	uint mi = meshlet_indices[gl_WorkGroupID.x];
-	uint ti = gl_LocalInvocationID.x; // thread index
-
-	vec4 cone = vec4(meshlets[mi].cone[0], meshlets[mi].cone[1], meshlets[mi].cone[2], meshlets[mi].cone[3]);
-
-	if (cone_cull(cone, vec3(0, 0, 1))) {
-		if (ti == 0) {
-			gl_PrimitiveCountNV = 0;
-		}
-		return;
-	}
+	// thread index
+	uint ti = gl_LocalInvocationID.x;
 
 #if DEBUG
 	uint mhash = hash(mi);
