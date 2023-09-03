@@ -230,6 +230,8 @@ fn update(
         );
     }
 
+    let mut triangle_count = 0;
+
     // DRAW
     {
         #[cfg(feature = "trace")]
@@ -250,7 +252,7 @@ fn update(
         let draw_count = 1;
 
         for (mesh, vb, ib, mb, meshlets_count) in &meshes {
-            let indices = &mesh.indices;
+            triangle_count += (mesh.indices.len() / 3) * draw_count;
 
             if rtx {
                 let Some(mb) = mb else {
@@ -283,7 +285,7 @@ fn update(
                 );
                 cendre.bind_index_buffer(command_buffer, ib, 0, vk::IndexType::UINT32);
                 for _ in 0..draw_count {
-                    cendre.draw_indexed(command_buffer, indices.len() as u32, 1, 0, 0, 0);
+                    cendre.draw_indexed(command_buffer, mesh.indices.len() as u32, 1, 0, 0, 0);
                 }
             }
         }
@@ -307,14 +309,17 @@ fn update(
 
         let (frame_gpu_begin, frame_gpu_end) = cendre.get_frame_time();
         *frame_gpu_avg = *frame_gpu_avg * 0.9 + (frame_gpu_end - frame_gpu_begin) * 0.1;
-        *frame_cpu_avg =
-            *frame_cpu_avg * 0.9 + (begin_frame.elapsed().as_secs_f64() * 1000.0) * 0.1;
+        let frame_cpu = begin_frame.elapsed().as_secs_f64() * 1000.0;
+        *frame_cpu_avg = *frame_cpu_avg * 0.9 + frame_cpu * 0.1;
+
+        let triangles_per_sec = triangle_count as f64 / ((frame_gpu_end - frame_gpu_begin) * 1e-3);
 
         window.title = format!(
-            "cpu: {:.2}ms gpu: {:.2}ms RTX: {}",
+            "cpu: {:.2} ms gpu: {:.2} ms mesh shading: {} {:.2}B tri/sec",
             *frame_cpu_avg,
             *frame_gpu_avg,
-            if rtx_enabled.0 { "ON" } else { "OFF" }
+            if rtx_enabled.0 { "ON" } else { "OFF" },
+            triangles_per_sec / 1e9,
         );
     }
 }
