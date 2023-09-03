@@ -66,13 +66,14 @@ impl CendreSwapchain {
             _ => vk::CompositeAlphaFlagsKHR::INHERIT,
         };
 
+        // TODO use present mode from Window
         let present_mode = unsafe {
             surface_loader.get_physical_device_surface_present_modes(physical_device, surface)
         }
         .unwrap()
         .iter()
         .copied()
-        .find(|&mode| mode == vk::PresentModeKHR::MAILBOX)
+        .find(|&mode| mode == vk::PresentModeKHR::IMMEDIATE)
         .unwrap_or(vk::PresentModeKHR::FIFO);
 
         let mut swapchain_create_info = vk::SwapchainCreateInfoKHR::default()

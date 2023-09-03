@@ -21,7 +21,7 @@ use bevy::{
     input::InputPlugin,
     log::LogPlugin,
     prelude::*,
-    window::WindowResized,
+    window::{PrimaryWindow, WindowResized},
     winit::{WinitPlugin, WinitWindows},
 };
 use cendre::{
@@ -91,7 +91,7 @@ pub struct CendreMeshUpdateTemplate(pub DescriptorUpdateTemplate);
 #[allow(clippy::too_many_lines)]
 fn init_cendre(
     mut commands: Commands,
-    windows: Query<Entity, With<Window>>,
+    windows: Query<Entity, With<PrimaryWindow>>,
     winit_windows: NonSendMut<WinitWindows>,
 ) {
     let winit_window = windows
@@ -246,8 +246,8 @@ fn update(
         };
         cendre.bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-        let draw_count = 2000;
-        // let draw_count = 1;
+        // let draw_count = 2000;
+        let draw_count = 1;
 
         for (mesh, vb, ib, mb, meshlets_count) in &meshes {
             let indices = &mesh.indices;
