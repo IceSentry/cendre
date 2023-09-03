@@ -48,10 +48,12 @@ fn main() {
                 }),
                 ..default()
             },
+            // if you need to output the logs to a file just do:
+            // cargo r 2>&1 > cendre.log
+            LogPlugin::default(),
             AccessibilityPlugin,
             WinitPlugin,
             InputPlugin,
-            LogPlugin::default(),
             AssetPlugin {
                 watch_for_changes: ChangeWatcher::with_delay(Duration::from_millis(250)),
                 ..default()
