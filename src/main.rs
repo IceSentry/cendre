@@ -336,33 +336,26 @@ fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreInsta
     if events.is_empty() {
         return;
     }
-    events.clear();
-    let surface_capabilities = unsafe {
-        cendre
-            .surface_loader
-            .get_physical_device_surface_capabilities(cendre.physical_device, cendre.surface)
-            .unwrap()
-    };
-
-    let new_width = surface_capabilities.current_extent.width;
-    let new_height = surface_capabilities.current_extent.height;
-    if cendre.swapchain.width == new_width && cendre.swapchain.height == new_height {
-        // FIXME: this will break with multiple windows
-        return;
+    for event in &mut events {
+        if cendre.swapchain.width == event.width as u32
+            && cendre.swapchain.height == event.height as u32
+        {
+            // FIXME: this will break with multiple windows
+            return;
+        }
+        cendre.swapchain = cendre.swapchain.resize(
+            &cendre.device,
+            &cendre.swapchain_loader,
+            &cendre.surface_loader,
+            cendre.surface,
+            cendre.surface_format,
+            cendre.physical_device,
+            event.width as u32,
+            event.height as u32,
+            cendre.render_pass,
+            cendre.swapchain.present_mode,
+        );
     }
-
-    cendre.swapchain = cendre.swapchain.resize(
-        &cendre.device,
-        &cendre.swapchain_loader,
-        &cendre.surface_loader,
-        cendre.surface,
-        cendre.surface_format,
-        cendre.physical_device,
-        new_width,
-        new_height,
-        cendre.render_pass,
-        cendre.swapchain.present_mode,
-    );
 }
 
 fn toggle_rtx(mut rtx_enabled: ResMut<RTXEnabled>, key_input: Res<Input<KeyCode>>) {
