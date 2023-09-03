@@ -7,7 +7,7 @@
 
 #include "mesh.h"
 
-#define DEBUG 0
+#define DEBUG 1
 #define CULL 1
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;

@@ -3,6 +3,7 @@ use std::time::Instant;
 use ash::vk;
 use bevy::prelude::*;
 use bytemuck::cast_slice;
+use meshopt::VertexDataAdapter;
 
 use crate::instance::{Buffer, CendreInstance};
 
@@ -42,7 +43,7 @@ pub fn optimize_mesh(vertices: &[Vertex], indices: &[u32]) -> Mesh {
 pub struct Meshlet {
     pub cone: [f32; 4],
     pub vertices: [u32; 64],
-    pub indices: [u8; MAX_TRIANGLE_COUNT * 3],
+    pub indices: [[u8; 3]; MAX_TRIANGLE_COUNT],
     pub triangle_count: u8,
     pub vertex_count: u8,
 }
@@ -52,7 +53,7 @@ impl Default for Meshlet {
         Self {
             cone: [0.0, 0.0, 0.0, 0.0],
             vertices: [0; 64],
-            indices: [0; MAX_TRIANGLE_COUNT * 3],
+            indices: [[0, 0, 0]; MAX_TRIANGLE_COUNT],
             triangle_count: 0,
             vertex_count: 0,
         }
@@ -74,118 +75,44 @@ impl Meshlet {
 
 #[allow(clippy::identity_op)]
 fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> Vec<Meshlet> {
-    let mut meshlets = vec![];
-    let mut meshlet = Meshlet::default();
-    let mut meshlet_vertices = vec![0xFF; vertices.len()];
-
-    for chunk in indices.chunks(3) {
-        let [a, b, c] = chunk else { unreachable!() };
-        if meshlet.vertex_count
-            + u8::from(meshlet_vertices[*a as usize] == 0xFF)
-            + u8::from(meshlet_vertices[*b as usize] == 0xFF)
-            + u8::from(meshlet_vertices[*c as usize] == 0xFF)
-            > 64
-            || meshlet.triangle_count >= MAX_TRIANGLE_COUNT as u8
-        {
-            meshlets.push(meshlet);
-            for i in 0..meshlet.vertex_count {
-                let v = meshlet.vertices[i as usize];
-                meshlet_vertices[v as usize] = 0xFF;
-            }
-            meshlet = Meshlet::default();
-        }
-
-        if meshlet_vertices[*a as usize] == 0xFF {
-            meshlet_vertices[*a as usize] = meshlet.vertex_count;
-            meshlet.vertices[meshlet.vertex_count as usize] = *a;
-            meshlet.vertex_count += 1;
-        }
-        if meshlet_vertices[*b as usize] == 0xFF {
-            meshlet_vertices[*b as usize] = meshlet.vertex_count;
-            meshlet.vertices[meshlet.vertex_count as usize] = *b;
-            meshlet.vertex_count += 1;
-        }
-        if meshlet_vertices[*c as usize] == 0xFF {
-            meshlet_vertices[*c as usize] = meshlet.vertex_count;
-            meshlet.vertices[meshlet.vertex_count as usize] = *c;
-            meshlet.vertex_count += 1;
-        }
-
-        let index = meshlet.triangle_count as usize * 3;
-        meshlet.indices[index + 0] = meshlet_vertices[*a as usize];
-        meshlet.indices[index + 1] = meshlet_vertices[*b as usize];
-        meshlet.indices[index + 2] = meshlet_vertices[*c as usize];
-        meshlet.triangle_count += 1;
-    }
-
-    if meshlet.triangle_count > 1 {
-        meshlets.push(meshlet);
-    }
+    let max_vertices = 64;
+    let max_triangles = 126;
+    let mut meshopt_meshlets =
+        meshopt::build_meshlets(indices, vertices.len(), max_vertices, max_triangles);
 
     // TODO this isn't necessary, but it makes it so we can assume to always
     // have 32 meshlets in the task shader
-    while meshlets.len() % 32 != 0 {
-        meshlets.push(Meshlet::default());
+    while meshopt_meshlets.len() % 32 != 0 {
+        meshopt_meshlets.push(meshopt::Meshlet {
+            vertices: [0; 64],
+            indices: [[0, 0, 0]; 126],
+            triangle_count: 0,
+            vertex_count: 0,
+        });
+    }
+
+    let mut meshlets = Vec::with_capacity(meshopt_meshlets.len());
+    for meshlet in &meshopt_meshlets {
+        let vertices =
+            VertexDataAdapter::new(cast_slice(vertices), std::mem::size_of::<Vertex>(), 0)
+                .expect("Failed to create VertexDataAdapter from vertices");
+        let bounds = meshopt::compute_meshlet_bounds(meshlet, &vertices);
+        let cone = [
+            bounds.cone_axis[0],
+            bounds.cone_axis[1],
+            bounds.cone_axis[2],
+            bounds.cone_cutoff,
+        ];
+        meshlets.push(Meshlet {
+            cone,
+            vertices: meshlet.vertices,
+            indices: meshlet.indices,
+            triangle_count: meshlet.triangle_count,
+            vertex_count: meshlet.vertex_count,
+        });
     }
 
     meshlets
-}
-
-fn build_meshlet_cone(mesh: &Mesh, meshlets: &mut Vec<Meshlet>) {
-    for meshlet in meshlets {
-        let mut normals = vec![Vec3::ZERO; meshlet.triangle_count as usize];
-
-        for i in 0..meshlet.triangle_count {
-            let i = i as usize;
-            let a = meshlet.indices[i * 3 + 0] as usize;
-            let b = meshlet.indices[i * 3 + 1] as usize;
-            let c = meshlet.indices[i * 3 + 2] as usize;
-
-            let va = mesh.vertices[meshlet.vertices[a] as usize];
-            let vb = mesh.vertices[meshlet.vertices[b] as usize];
-            let vc = mesh.vertices[meshlet.vertices[c] as usize];
-
-            let p0 = Vec3::new(va.pos[0], va.pos[1], va.pos[2]);
-            let p1 = Vec3::new(vb.pos[0], vb.pos[1], vb.pos[2]);
-            let p2 = Vec3::new(vc.pos[0], vc.pos[1], vc.pos[2]);
-
-            let p10 = p1 - p0;
-            let p20 = p2 - p0;
-
-            let normal = p10.cross(p20);
-
-            normals[i] = normal * normal.length_recip();
-        }
-
-        let mut avgnormal = Vec3::ZERO;
-        for n in &normals {
-            avgnormal += *n;
-        }
-        if avgnormal.length() == 0.0 {
-            avgnormal.x = 1.0;
-            avgnormal.y = 0.0;
-            avgnormal.z = 0.0;
-        } else {
-            avgnormal /= avgnormal.length();
-        }
-
-        let mut mindp: f32 = 1.0;
-        assert_eq!(normals.len(), meshlet.triangle_count as usize);
-        for n in normals {
-            let dp = n.dot(avgnormal);
-            mindp = mindp.min(dp);
-        }
-
-        let conew = if mindp <= 0.0 {
-            1.0
-        } else {
-            (1.0 - mindp * mindp).sqrt()
-        };
-        meshlet.cone[0] = avgnormal[0];
-        meshlet.cone[1] = avgnormal[1];
-        meshlet.cone[2] = avgnormal[2];
-        meshlet.cone[3] = conew;
-    }
 }
 
 #[derive(Component, Deref)]
@@ -255,10 +182,8 @@ pub fn prepare_mesh(
 
         if cendre.rtx_supported {
             // TODO build meshlets on load
-            let mut meshlets = build_meshlets(&mesh.vertices, &mesh.indices);
+            let meshlets = build_meshlets(&mesh.vertices, &mesh.indices);
             info!("Meshlets: {}", meshlets.len());
-
-            build_meshlet_cone(mesh, &mut meshlets);
 
             let mut culled = 0;
             for meshlet in &meshlets {
