@@ -8,6 +8,7 @@
 #include "mesh.h"
 
 #define DEBUG 0
+#define CULL 1
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 126) out;
@@ -36,11 +37,30 @@ uint hash(uint a) {
 	return a;
 }
 
+bool cone_cull(vec4 cone, vec3 view) {
+	return dot(cone.xyz, view) > cone.w;
+}
+
 void main() {
 	// mesh index
 	uint mi = meshlet_indices[gl_WorkGroupID.x];
 	// thread index
 	uint ti = gl_LocalInvocationID.x;
+
+#if CULL
+	vec4 cone = vec4(
+		meshlets[mi].cone[0],
+		meshlets[mi].cone[1],
+		meshlets[mi].cone[2],
+		meshlets[mi].cone[3]
+	);
+	if (cone_cull(cone, vec3(0, 0, 1))) {
+		if (ti == 0) {
+			gl_PrimitiveCountNV = 0;
+		}
+		return;
+	}
+#endif // CULL
 
 #if DEBUG
 	uint mhash = hash(mi);

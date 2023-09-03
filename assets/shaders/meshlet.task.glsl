@@ -2,8 +2,6 @@
 
 #extension GL_EXT_shader_16bit_storage: require
 #extension GL_EXT_shader_8bit_storage: require
-// TODO look into VK_EXT_mesh_shader instead of NV_mesh_shader
-// it should be easier to make it compatible with DX12
 #extension GL_NV_mesh_shader: require
 #extension GL_GOOGLE_include_directive: require
 #extension GL_KHR_shader_subgroup_arithmetic: require

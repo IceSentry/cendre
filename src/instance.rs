@@ -1029,6 +1029,12 @@ unsafe extern "system" fn vulkan_debug_callback(
 
     let message_format =
         format!("{message_type:?} [{message_id_name} ({message_id_number})]:\n{message}\n");
+
+    // if message.contains("VUID-RuntimeSpirv-maxTaskSharedMemorySize-08759") {
+    //     warn!("{message_format}");
+    //     return vk::FALSE;
+    // }
+
     match message_severity {
         vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => trace!("{message_format}"),
         vk::DebugUtilsMessageSeverityFlagsEXT::INFO => info!("{message_format}"),
