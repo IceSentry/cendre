@@ -8,7 +8,7 @@ struct Meshlet {
     // for some reason using `vec4` doesn't seem to work but using an array works
     float cone[4];
     uint vertices[64];
-    uint8_t indices[126 * 3];
+    uint indicesPacked[124 * 3 / 4];
     uint8_t triangleCount;
     uint8_t vertexCount;
 };

@@ -8,10 +8,9 @@
 #include "mesh.h"
 
 #define DEBUG 0
-#define CULL 0
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
-layout(triangles, max_vertices = 64, max_primitives = 126) out;
+layout(triangles, max_vertices = 64, max_primitives = 124) out;
 
 layout(binding = 0) readonly buffer Vertices {
 	Vertex vertices[];
@@ -81,10 +80,10 @@ void main() {
 #endif
 	}
 
-	uint indexCount = uint(meshlets[mi].triangleCount) * 3;
-	for (uint i = ti; i < indexCount; i += 32)
-	{
-		gl_PrimitiveIndicesNV[i] = uint(meshlets[mi].indices[i]);
+	uint index_count = uint(meshlets[mi].triangleCount) * 3;
+	uint index_group_count = (index_count + 3) / 4;
+	for (uint i = ti; i < index_group_count; i += 32) {
+		writePackedPrimitiveIndices4x8NV(i * 4, meshlets[mi].indicesPacked[i]);
 	}
 
 	if (ti == 0) {

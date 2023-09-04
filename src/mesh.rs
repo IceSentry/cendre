@@ -7,7 +7,7 @@ use meshopt::VertexDataAdapter;
 
 use crate::instance::{Buffer, CendreInstance};
 
-const MAX_TRIANGLE_COUNT: usize = 126;
+const MAX_TRIANGLE_COUNT: usize = 124;
 
 #[repr(C)]
 #[derive(Copy, Clone, Default, bytemuck::Zeroable, Debug)]
@@ -84,11 +84,13 @@ fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> Vec<Meshlet> {
             bounds.cone_axis[2],
             bounds.cone_cutoff,
         ];
+        let mut indices: [[u8; 3]; MAX_TRIANGLE_COUNT] = [[0, 0, 0]; MAX_TRIANGLE_COUNT];
+        indices.copy_from_slice(&meshlet.indices[..MAX_TRIANGLE_COUNT]);
 
         meshlets.push(Meshlet {
             cone,
             vertices: meshlet.vertices,
-            indices: meshlet.indices,
+            indices,
             triangle_count: meshlet.triangle_count,
             vertex_count: meshlet.vertex_count,
         });
