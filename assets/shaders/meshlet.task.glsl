@@ -9,7 +9,7 @@
 
 #include "mesh.h"
 
-#define CULL 0
+#define CULL 1
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 
@@ -36,10 +36,6 @@ void main() {
 	uint mi = mgi * 32 + ti;
 
 #if CULL
-
-	// TODO for some reason, culling doesn't seem to do anything on my machine
-	// it might just be that drivers handle this code differently now
-
 	vec4 cone = vec4(
 		meshlets[mi].cone[0],
 		meshlets[mi].cone[1],

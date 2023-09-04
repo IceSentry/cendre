@@ -125,16 +125,14 @@ fn init_cendre(
         let mesh_shader = cendre.load_shader("assets/shaders/meshlet.mesh.glsl");
         let task_shader = cendre.load_shader("assets/shaders/meshlet.task.glsl");
 
-        let mesh_layout_rtx = cendre
-            .create_pipeline_layout(&[&mesh_shader, &fragment_shader])
-            .unwrap();
-
+        let shaders = [&task_shader, &mesh_shader, &fragment_shader];
+        let mesh_layout_rtx = cendre.create_pipeline_layout(&shaders).unwrap();
         let mesh_update_template_rtx = cendre
             .create_update_template(
                 vk::PipelineBindPoint::GRAPHICS,
                 DescriptorUpdateTemplateType::PUSH_DESCRIPTORS_KHR,
                 &mesh_layout_rtx,
-                &[&task_shader, &mesh_shader, &fragment_shader],
+                &shaders,
             )
             .unwrap();
         commands.insert_resource(CendreMeshUpdateTemplateRTX(mesh_update_template_rtx));

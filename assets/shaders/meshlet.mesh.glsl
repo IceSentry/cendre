@@ -47,21 +47,6 @@ void main() {
 	// thread index
 	uint ti = gl_LocalInvocationID.x;
 
-#if CULL
-	vec4 cone = vec4(
-		meshlets[mi].cone[0],
-		meshlets[mi].cone[1],
-		meshlets[mi].cone[2],
-		meshlets[mi].cone[3]
-	);
-	if (cone_cull(cone, vec3(0, 0, 1))) {
-		if (ti == 0) {
-			gl_PrimitiveCountNV = 0;
-		}
-		return;
-	}
-#endif // CULL
-
 #if DEBUG
 	uint mhash = hash(mi);
 	vec3 mcolor = vec3(
