@@ -26,7 +26,9 @@ void main() {
 	vec2 texcoord = vec2(vertices[gl_VertexIndex].tu, vertices[gl_VertexIndex].tv);
 
     vec3 offset = vec3(0.25, -0.75, 0.5);
+    // vec3 offset = vec3(0, 0, 0.5);
     vec3 scale = vec3(1.0, 1.0, 0.5);
+    // vec3 scale = vec3(1, 1, 0.5);
 
 	gl_Position = vec4(position * scale + offset, 1.0);
 
