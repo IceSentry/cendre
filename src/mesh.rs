@@ -39,6 +39,7 @@ pub fn optimize_mesh(vertices: &[Vertex], indices: &[u32]) -> Mesh {
     Mesh { vertices, indices }
 }
 
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct Meshlet {
     pub cone: [f32; 4],
@@ -47,38 +48,18 @@ pub struct Meshlet {
     pub triangle_count: u8,
     pub vertex_count: u8,
 }
-
-impl Default for Meshlet {
-    fn default() -> Self {
-        Self {
-            cone: [0.0, 0.0, 0.0, 0.0],
-            vertices: [0; 64],
-            indices: [[0, 0, 0]; MAX_TRIANGLE_COUNT],
-            triangle_count: 0,
-            vertex_count: 0,
-        }
+unsafe impl bytemuck::Zeroable for Meshlet {
+    fn zeroed() -> Self {
+        unsafe { core::mem::zeroed() }
     }
 }
-
-impl Meshlet {
-    #[must_use]
-    pub fn bytes(&self) -> Vec<u8> {
-        let mut data = vec![];
-        data.extend_from_slice(cast_slice(&self.cone));
-        data.extend_from_slice(cast_slice(&self.vertices));
-        data.extend_from_slice(cast_slice(&self.indices));
-        data.push(self.triangle_count);
-        data.push(self.vertex_count);
-        data
-    }
-}
+unsafe impl bytemuck::Pod for Meshlet {}
 
 #[allow(clippy::identity_op)]
 fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> Vec<Meshlet> {
     let max_vertices = 64;
-    let max_triangles = 126;
     let mut meshopt_meshlets =
-        meshopt::build_meshlets(indices, vertices.len(), max_vertices, max_triangles);
+        meshopt::build_meshlets(indices, vertices.len(), max_vertices, MAX_TRIANGLE_COUNT);
 
     // TODO this isn't necessary, but it makes it so we can assume to always
     // have 32 meshlets in the task shader
@@ -103,6 +84,7 @@ fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> Vec<Meshlet> {
             bounds.cone_axis[2],
             bounds.cone_cutoff,
         ];
+
         meshlets.push(Meshlet {
             cone,
             vertices: meshlet.vertices,
@@ -197,7 +179,10 @@ pub fn prepare_mesh(
                 (culled as f32 / meshlets.len() as f32) * 100.0
             );
 
-            let data = meshlets.iter().flat_map(Meshlet::bytes).collect::<Vec<_>>();
+            let mut data = Vec::with_capacity(meshlets.len() * std::mem::size_of::<Meshlet>());
+            for m in &meshlets {
+                data.extend_from_slice(bytemuck::bytes_of(m));
+            }
 
             let meshlet_buffer = cendre
                 .create_buffer(
