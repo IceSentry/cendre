@@ -7,7 +7,7 @@
 
 #include "mesh.h"
 
-#define DEBUG 1
+#define DEBUG 0
 #define CULL 0
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
@@ -56,9 +56,8 @@ void main() {
 	) / 255.0;
 #endif
 
-	uint vertexCount = uint(meshlets[mi].vertexCount);
-	for (uint i = ti; i < vertexCount; i += 32)
-	{
+	uint vertex_count = uint(meshlets[mi].vertexCount);
+	for (uint i = ti; i < vertex_count; i += 32) {
 		uint vi = meshlets[mi].vertices[i]; // vertex index
 
 		vec3 position = vec3(vertices[vi].vx, vertices[vi].vy, vertices[vi].vz);
@@ -69,15 +68,16 @@ void main() {
 		) / 127.0 - 1.0;
 		vec2 texcoord = vec2(vertices[vi].tu, vertices[vi].tv);
 
-		vec3 offset = vec3(0.25, -0.75, 0.5);
-		// vec3 offset = vec3(0, 0, 0.5);
-		vec3 scale = vec3(1.0, 1.0, 0.5);
-		// vec3 scale = vec3(1, 1, 0.5);
+		// vec3 offset = vec3(0.25, -0.75, 0.5);
+		vec3 offset = vec3(0, 0, 0.5);
+		// vec3 scale = vec3(1.0, 1.0, 0.5);
+		vec3 scale = vec3(1, 1, 0.5);
 
 		gl_MeshVerticesNV[i].gl_Position = vec4(position * scale + offset, 1.0);
-		color[i] = vec4(normal * 0.5 + vec3(0.5), 1.0);
 #if DEBUG
 		color[i] = vec4(mcolor, 1.0);
+#else
+		color[i] = vec4(normal * 0.5 + vec3(0.5), 1.0);
 #endif
 	}
 

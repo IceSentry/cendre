@@ -31,8 +31,8 @@ use cendre::{
     RTXEnabled,
 };
 
-pub const OBJ_PATH: &str = "models/bunny.obj";
-pub const VSYNC: bool = true;
+pub const OBJ_PATH: &str = "models/buddha.obj";
+pub const VSYNC: bool = false;
 
 fn main() {
     App::new()
@@ -118,7 +118,7 @@ fn init_cendre(
         vk::PipelineRasterizationStateCreateInfo::default()
             .polygon_mode(vk::PolygonMode::FILL)
             .front_face(vk::FrontFace::CLOCKWISE)
-            .cull_mode(vk::CullModeFlags::FRONT)
+            .cull_mode(vk::CullModeFlags::BACK)
             .line_width(1.0);
 
     if cendre.rtx_supported {
@@ -254,8 +254,8 @@ fn update(
         };
         cendre.bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-        // let draw_count = 2000;
-        let draw_count = 1;
+        let draw_count = 100;
+        // let draw_count = 1;
 
         for (mesh, vb, ib, mb, meshlets_count) in &meshes {
             triangle_count += (mesh.indices.len() / 3) * draw_count;
@@ -314,9 +314,9 @@ fn update(
         let _span = bevy::utils::tracing::info_span!("update frame time").entered();
 
         let (frame_gpu_begin, frame_gpu_end) = cendre.get_frame_time();
-        *frame_gpu_avg = *frame_gpu_avg * 0.9 + (frame_gpu_end - frame_gpu_begin) * 0.1;
+        *frame_gpu_avg = *frame_gpu_avg * 0.95 + (frame_gpu_end - frame_gpu_begin) * 0.05;
         let frame_cpu = begin_frame.elapsed().as_secs_f64() * 1000.0;
-        *frame_cpu_avg = *frame_cpu_avg * 0.9 + frame_cpu * 0.1;
+        *frame_cpu_avg = *frame_cpu_avg * 0.95 + frame_cpu * 0.05;
 
         let triangles_per_sec = triangle_count as f64 / ((frame_gpu_end - frame_gpu_begin) * 1e-3);
 
