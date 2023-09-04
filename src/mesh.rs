@@ -12,9 +12,9 @@ const MAX_TRIANGLE_COUNT: usize = 126;
 #[repr(C)]
 #[derive(Copy, Clone, Default, bytemuck::Zeroable, Debug)]
 pub struct Vertex {
-    pub pos: [f32; 4],
+    pub pos: [f32; 3],
     pub norm: [u8; 4], // u32
-    pub uv: [f32; 2],
+    pub uv: [u16; 2],
 }
 
 unsafe impl bytemuck::Pod for Vertex {}

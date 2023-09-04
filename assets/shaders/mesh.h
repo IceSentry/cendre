@@ -1,7 +1,7 @@
 struct Vertex {
-    float vx, vy, vz, vw;
+    float vx, vy, vz;
     uint8_t nx, ny, nz, nw;
-    float tu, tv;
+    float16_t tu, tv;
 };
 
 struct Meshlet {

@@ -138,10 +138,12 @@ fn generate_mesh(model: &tobj::Model) -> Mesh {
 
     let mut vertices = vec![];
     for (pos, (norm, uv)) in positions.iter().zip(normals.iter().zip(uvs.iter())) {
+        let u = meshopt::quantize_half(uv[0]);
+        let v = meshopt::quantize_half(uv[1]);
         vertices.push(Vertex {
-            pos: [pos[0], pos[1], pos[2], 0.0],
+            pos: [pos[0], pos[1], pos[2]],
             norm: *norm,
-            uv: *uv,
+            uv: [u, v],
         });
     }
 
