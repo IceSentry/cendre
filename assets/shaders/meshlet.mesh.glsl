@@ -7,7 +7,7 @@
 
 #include "mesh.h"
 
-#define DEBUG 0
+#define DEBUG 1
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 124) out;
@@ -18,6 +18,10 @@ layout(binding = 0) readonly buffer Vertices {
 
 layout(binding = 1) readonly buffer Meshlets {
 	Meshlet meshlets[];
+};
+
+layout(binding = 2) readonly buffer MeshletData {
+	uint meshlet_data[];
 };
 
 in taskNV block {
@@ -55,9 +59,12 @@ void main() {
 	) / 255.0;
 #endif
 
-	uint vertex_count = uint(meshlets[mi].vertexCount);
+	uint vertex_count = uint(meshlets[mi].vertex_count);
+	uint vertex_offset = meshlets[mi].data_offset;
+	uint index_offset = vertex_offset + vertex_count;
+
 	for (uint i = ti; i < vertex_count; i += 32) {
-		uint vi = meshlets[mi].vertices[i]; // vertex index
+		uint vi = meshlet_data[vertex_offset + i]; // vertex index
 
 		vec3 position = vec3(vertices[vi].vx, vertices[vi].vy, vertices[vi].vz);
 		vec3 normal = vec3(
@@ -67,10 +74,10 @@ void main() {
 		) / 127.0 - 1.0;
 		vec2 texcoord = vec2(vertices[vi].tu, vertices[vi].tv);
 
-		// vec3 offset = vec3(0.25, -0.75, 0.5);
-		vec3 offset = vec3(0, 0, 0.5);
-		// vec3 scale = vec3(1.0, 1.0, 0.5);
-		vec3 scale = vec3(1, 1, 0.5);
+		vec3 offset = vec3(0.25, -0.75, 0.5);
+		// vec3 offset = vec3(0, 0, 0.5);
+		vec3 scale = vec3(1.0, 1.0, 0.5);
+		// vec3 scale = vec3(1, 1, 0.5);
 
 		gl_MeshVerticesNV[i].gl_Position = vec4(position * scale + offset, 1.0);
 #if DEBUG
@@ -80,13 +87,13 @@ void main() {
 #endif
 	}
 
-	uint index_count = uint(meshlets[mi].triangleCount) * 3;
+	uint index_count = uint(meshlets[mi].triangle_count) * 3;
 	uint index_group_count = (index_count + 3) / 4;
 	for (uint i = ti; i < index_group_count; i += 32) {
-		writePackedPrimitiveIndices4x8NV(i * 4, meshlets[mi].indicesPacked[i]);
+		writePackedPrimitiveIndices4x8NV(i * 4, meshlet_data[index_offset + i]);
 	}
 
 	if (ti == 0) {
-    	gl_PrimitiveCountNV = uint(meshlets[mi].triangleCount);
+    	gl_PrimitiveCountNV = uint(meshlets[mi].triangle_count);
 	}
 }

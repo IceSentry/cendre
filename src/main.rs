@@ -26,13 +26,16 @@ use bevy::{
 };
 use cendre::{
     instance::{CendreInstance, DescriptorUpdateTemplate, Pipeline},
-    mesh::{prepare_mesh, IndexBuffer, Mesh, MeshletBuffer, MeshletsCount, VertexBuffer},
+    mesh::{
+        prepare_mesh, IndexBuffer, Mesh, MeshletBuffer, MeshletDataBuffer, MeshletsCount,
+        VertexBuffer,
+    },
     obj_loader::{ObjBundle, ObjLoaderPlugin},
     RTXEnabled,
 };
 
-pub const OBJ_PATH: &str = "models/buddha.obj";
-pub const VSYNC: bool = false;
+pub const OBJ_PATH: &str = "models/bunny.obj";
+pub const VSYNC: bool = true;
 
 fn main() {
     App::new()
@@ -193,6 +196,7 @@ fn update(
         &IndexBuffer,
         Option<&MeshletBuffer>,
         Option<&MeshletsCount>,
+        Option<&MeshletDataBuffer>,
     )>,
     mut frame_gpu_avg: Local<f64>,
     mut frame_cpu_avg: Local<f64>,
@@ -254,10 +258,10 @@ fn update(
         };
         cendre.bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-        let draw_count = 100;
-        // let draw_count = 1;
+        // let draw_count = 100;
+        let draw_count = 1;
 
-        for (mesh, vb, ib, mb, meshlets_count) in &meshes {
+        for (mesh, vb, ib, mb, meshlets_count, mdb) in &meshes {
             triangle_count += (mesh.indices.len() / 3) * draw_count;
 
             if rtx {
@@ -267,8 +271,15 @@ fn update(
                 let Some(meshlets_count) = meshlets_count else {
                     continue;
                 };
+                let Some(mdb) = mdb else {
+                    continue;
+                };
 
-                let descriptors = [vb.descriptor_info(0), mb.descriptor_info(0)];
+                let descriptors = [
+                    vb.descriptor_info(0),
+                    mb.descriptor_info(0),
+                    mdb.descriptor_info(0),
+                ];
                 cendre.push_descriptor_set_with_template(
                     command_buffer,
                     &mesh_update_template_rtx,

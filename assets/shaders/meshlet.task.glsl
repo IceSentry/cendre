@@ -56,7 +56,6 @@ void main() {
 	}
 #else
 	meshlet_indices[ti] = mi;
-
 	if (ti == 0) {
 		gl_TaskCountNV = 32;
 	}

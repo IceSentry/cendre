@@ -43,10 +43,11 @@ pub fn optimize_mesh(vertices: &[Vertex], indices: &[u32]) -> Mesh {
 #[derive(Copy, Clone)]
 pub struct Meshlet {
     pub cone: [f32; 4],
-    pub vertices: [u32; 64],
-    pub indices: [[u8; 3]; MAX_TRIANGLE_COUNT],
-    pub triangle_count: u8,
+    // data_offset..data_offset + vertex_count - 1 stores vertex indices,
+    // we store indices packed un 4bytes units after that
+    pub data_offset: u32,
     pub vertex_count: u8,
+    pub triangle_count: u8,
 }
 unsafe impl bytemuck::Zeroable for Meshlet {
     fn zeroed() -> Self {
@@ -56,24 +57,36 @@ unsafe impl bytemuck::Zeroable for Meshlet {
 unsafe impl bytemuck::Pod for Meshlet {}
 
 #[allow(clippy::identity_op)]
-fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> Vec<Meshlet> {
+fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> (Vec<Meshlet>, Vec<u32>) {
     let max_vertices = 64;
     let mut meshopt_meshlets =
         meshopt::build_meshlets(indices, vertices.len(), max_vertices, MAX_TRIANGLE_COUNT);
 
     // TODO this isn't necessary, but it makes it so we can assume to always
     // have 32 meshlets in the task shader
+    let empty_meshlet = unsafe { std::mem::zeroed::<meshopt::Meshlet>() };
     while meshopt_meshlets.len() % 32 != 0 {
-        meshopt_meshlets.push(meshopt::Meshlet {
-            vertices: [0; 64],
-            indices: [[0, 0, 0]; 126],
-            triangle_count: 0,
-            vertex_count: 0,
-        });
+        meshopt_meshlets.push(empty_meshlet);
     }
 
     let mut meshlets = Vec::with_capacity(meshopt_meshlets.len());
+    let mut meshlet_data = Vec::new();
     for meshlet in &meshopt_meshlets {
+        let data_offset = meshlet_data.len() as u32;
+        for i in 0..meshlet.vertex_count as usize {
+            meshlet_data.push(meshlet.vertices[i]);
+        }
+
+        let index_group_count = (meshlet.triangle_count as usize * 3 + 3) / 4;
+        let flat_indices = meshlet.indices.iter().flatten().collect::<Vec<_>>();
+        for chunk in flat_indices.chunks(4).take(index_group_count) {
+            let [a, b, c, d] = *chunk else {
+                // If this actually happens, maybe consider padding
+                panic!("invalid chunk for indices");
+            };
+            meshlet_data.push(u32::from_ne_bytes([*a, *b, *c, *d]));
+        }
+
         let vertices =
             VertexDataAdapter::new(cast_slice(vertices), std::mem::size_of::<Vertex>(), 0)
                 .expect("Failed to create VertexDataAdapter from vertices");
@@ -84,19 +97,15 @@ fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> Vec<Meshlet> {
             bounds.cone_axis[2],
             bounds.cone_cutoff,
         ];
-        let mut indices: [[u8; 3]; MAX_TRIANGLE_COUNT] = [[0, 0, 0]; MAX_TRIANGLE_COUNT];
-        indices.copy_from_slice(&meshlet.indices[..MAX_TRIANGLE_COUNT]);
-
         meshlets.push(Meshlet {
             cone,
-            vertices: meshlet.vertices,
-            indices,
-            triangle_count: meshlet.triangle_count,
+            data_offset,
             vertex_count: meshlet.vertex_count,
+            triangle_count: meshlet.triangle_count,
         });
     }
 
-    meshlets
+    (meshlets, meshlet_data)
 }
 
 #[derive(Component, Deref)]
@@ -105,6 +114,8 @@ pub struct VertexBuffer(pub Buffer);
 pub struct IndexBuffer(pub Buffer);
 #[derive(Component, Deref)]
 pub struct MeshletBuffer(pub Buffer);
+#[derive(Component, Deref)]
+pub struct MeshletDataBuffer(pub Buffer);
 
 #[derive(Component)]
 pub struct MeshletsCount(pub u32);
@@ -166,7 +177,7 @@ pub fn prepare_mesh(
 
         if cendre.rtx_supported {
             // TODO build meshlets on load
-            let meshlets = build_meshlets(&mesh.vertices, &mesh.indices);
+            let (meshlets, meshlet_data) = build_meshlets(&mesh.vertices, &mesh.indices);
             info!("Meshlets: {}", meshlets.len());
 
             let mut culled = 0;
@@ -193,15 +204,34 @@ pub fn prepare_mesh(
                     gpu_allocator::MemoryLocation::GpuOnly,
                 )
                 .unwrap();
+            let meshlet_data_buffer = cendre
+                .create_buffer(
+                    128 * 1024 * 1024,
+                    vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::STORAGE_BUFFER,
+                    gpu_allocator::MemoryLocation::GpuOnly,
+                )
+                .unwrap();
+
             cendre.updload_buffer(
                 cendre.command_buffers[0],
                 &mut scratch_buffer,
                 &meshlet_buffer,
                 &data,
             );
+            cendre.updload_buffer(
+                cendre.command_buffers[0],
+                &mut scratch_buffer,
+                &meshlet_data_buffer,
+                &meshlet_data
+                    .iter()
+                    .flat_map(|x| x.to_ne_bytes())
+                    .collect::<Vec<_>>(),
+            );
+
             entity_cmd.insert((
                 MeshletBuffer(meshlet_buffer),
                 MeshletsCount(meshlets.len() as u32),
+                MeshletDataBuffer(meshlet_data_buffer),
             ));
         }
 
