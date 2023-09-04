@@ -37,6 +37,5 @@ void main() {
         position * scale + offset * vec3(2.0, 2.0, 0.5) + vec3(-1.0, -1.0, 0.5),
         1.0
     );
-
 	color = vec4(normal * 0.5 + vec3(0.5), 1.0);
 }

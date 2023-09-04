@@ -21,6 +21,7 @@ pub struct Shader {
     pub entry_point: CString,
     pub stage: vk::ShaderStageFlags,
     pub storage_buffer_mask: u32,
+    pub uses_push_constant: bool,
 }
 
 impl Shader {
@@ -89,6 +90,18 @@ pub struct ParseInfo {
     pub stage: ShaderStageFlags,
     pub entry_point: String,
     pub storage_buffer_mask: u32,
+    pub uses_push_constants: bool,
+}
+
+impl Default for ParseInfo {
+    fn default() -> Self {
+        Self {
+            stage: vk::ShaderStageFlags::empty(),
+            entry_point: String::new(),
+            storage_buffer_mask: 0,
+            uses_push_constants: false,
+        }
+    }
 }
 
 impl std::fmt::Debug for ParseInfo {
@@ -100,6 +113,7 @@ impl std::fmt::Debug for ParseInfo {
                 "storage_buffer_mask",
                 &format!("{:032b}", self.storage_buffer_mask),
             )
+            .field("uses_push_constant", &self.uses_push_constants)
             .finish()
     }
 }
@@ -115,11 +129,7 @@ pub fn parse_spirv(code: &[u32]) -> anyhow::Result<ParseInfo> {
     }
     let module = loader.module();
 
-    let mut parse_info = ParseInfo {
-        stage: vk::ShaderStageFlags::empty(),
-        entry_point: String::new(),
-        storage_buffer_mask: 0,
-    };
+    let mut parse_info = ParseInfo::default();
 
     let mut ids: Vec<Id> = vec![Id::default(); module.header.as_ref().unwrap().bound as usize];
 
@@ -162,19 +172,19 @@ pub fn parse_spirv(code: &[u32]) -> anyhow::Result<ParseInfo> {
     }
 
     for id in ids {
-        if id.kind == IdKind::Variable
-            && matches!(
-                id.storage_class,
-                StorageClass::Uniform | StorageClass::StorageBuffer
-            )
-        {
-            // WARN right now we assume any buffers are StorageBuffer
-
-            assert!(id.set == 0);
-            assert!(id.binding < 32);
-            assert!(parse_info.storage_buffer_mask & (1 << id.binding) == 0);
-
-            parse_info.storage_buffer_mask |= 1 << id.binding;
+        if id.kind == IdKind::Variable {
+            match id.storage_class {
+                StorageClass::Uniform | StorageClass::StorageBuffer => {
+                    // WARN right now we assume any buffers are StorageBuffer
+                    assert!(id.set == 0);
+                    assert!(id.binding < 32);
+                    parse_info.storage_buffer_mask |= 1 << id.binding;
+                }
+                StorageClass::PushConstant => {
+                    parse_info.uses_push_constants = true;
+                }
+                _ => {}
+            }
         }
     }
 

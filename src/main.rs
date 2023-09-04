@@ -310,7 +310,7 @@ fn update(
                     cendre.push_constants(
                         command_buffer,
                         &pipeline.layout,
-                        vk::ShaderStageFlags::ALL,
+                        vk::ShaderStageFlags::MESH_NV,
                         0,
                         bytemuck::bytes_of(draw),
                     );
@@ -330,7 +330,7 @@ fn update(
                     cendre.push_constants(
                         command_buffer,
                         &pipeline.layout,
-                        vk::ShaderStageFlags::ALL,
+                        vk::ShaderStageFlags::VERTEX,
                         0,
                         bytemuck::bytes_of(draw),
                     );

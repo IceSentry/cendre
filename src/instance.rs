@@ -453,6 +453,7 @@ impl CendreInstance {
             entry_point,
             stage: parse_info.stage,
             storage_buffer_mask: parse_info.storage_buffer_mask,
+            uses_push_constant: parse_info.uses_push_constants,
         }
     }
 
@@ -491,18 +492,24 @@ impl CendreInstance {
             self.device
                 .create_descriptor_set_layout(&create_info, None)?
         };
-        let mut create_info =
-            vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&set_layout));
+
         let mut push_constant_range = vk::PushConstantRange::default();
         if push_constant_size > 0 {
+            let mut stage_flags = vk::ShaderStageFlags::empty();
+            for shader in shaders {
+                if shader.uses_push_constant {
+                    stage_flags |= shader.stage;
+                }
+            }
             push_constant_range = push_constant_range
                 .size(push_constant_size)
                 .offset(0)
-                .stage_flags(vk::ShaderStageFlags::ALL);
-            create_info =
-                create_info.push_constant_ranges(std::slice::from_ref(&push_constant_range));
+                .stage_flags(stage_flags);
         }
 
+        let create_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(std::slice::from_ref(&set_layout))
+            .push_constant_ranges(std::slice::from_ref(&push_constant_range));
         let pipeline_layout = unsafe { self.device.create_pipeline_layout(&create_info, None)? };
 
         let vk_pipeline_layout = Arc::new(Mutex::new(pipeline_layout));
