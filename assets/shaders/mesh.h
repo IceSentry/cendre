@@ -11,3 +11,8 @@ struct Meshlet {
     uint8_t vertex_count;
     uint8_t triangle_count;
 };
+
+struct MeshDraw {
+    float offset[2];
+    float scale[2];
+};

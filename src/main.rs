@@ -27,15 +27,15 @@ use bevy::{
 use cendre::{
     instance::{CendreInstance, DescriptorUpdateTemplate, Pipeline},
     mesh::{
-        prepare_mesh, IndexBuffer, Mesh, MeshletBuffer, MeshletDataBuffer, MeshletsCount,
+        prepare_mesh, IndexBuffer, Mesh, MeshDraw, MeshletBuffer, MeshletDataBuffer, MeshletsCount,
         VertexBuffer,
     },
     obj_loader::{ObjBundle, ObjLoaderPlugin},
     RTXEnabled,
 };
 
-pub const OBJ_PATH: &str = "models/bunny.obj";
-pub const VSYNC: bool = true;
+pub const OBJ_PATH: &str = "models/kitten.obj";
+pub const VSYNC: bool = false;
 
 fn main() {
     App::new()
@@ -129,7 +129,9 @@ fn init_cendre(
         let task_shader = cendre.load_shader("assets/shaders/meshlet.task.glsl");
 
         let shaders = [&task_shader, &mesh_shader, &fragment_shader];
-        let mesh_layout_rtx = cendre.create_pipeline_layout(&shaders).unwrap();
+        let mesh_layout_rtx = cendre
+            .create_pipeline_layout(&shaders, std::mem::size_of::<MeshDraw>() as u32)
+            .expect("Failed to create pipeline layout for mesh shading");
         let mesh_update_template_rtx = cendre
             .create_update_template(
                 vk::PipelineBindPoint::GRAPHICS,
@@ -155,15 +157,16 @@ fn init_cendre(
         commands.insert_resource(CendrePipelineRTX(pipeline_rtx));
     }
 
+    let shaders = [&vertex_shader, &fragment_shader];
     let mesh_layout = cendre
-        .create_pipeline_layout(&[&vertex_shader, &fragment_shader])
+        .create_pipeline_layout(&shaders, std::mem::size_of::<MeshDraw>() as u32)
         .unwrap();
     let mesh_update_template = cendre
         .create_update_template(
             vk::PipelineBindPoint::GRAPHICS,
             DescriptorUpdateTemplateType::PUSH_DESCRIPTORS_KHR,
             &mesh_layout,
-            &[&vertex_shader, &fragment_shader],
+            &shaders,
         )
         .unwrap();
     commands.insert_resource(CendreMeshUpdateTemplate(mesh_update_template));
@@ -258,8 +261,23 @@ fn update(
         };
         cendre.bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
-        // let draw_count = 100;
-        let draw_count = 1;
+        let draw_count = 100;
+        // let draw_count = 1;
+
+        let mut draws = Vec::new();
+        for i in 0..draw_count {
+            #[rustfmt::skip]
+            draws.push(MeshDraw {
+                offset: [
+                    (i % 10) as f32 / 10.0 + 0.5 / 10.0,
+                    (i / 10) as f32 / 10.0 + 0.5 / 10.0
+                ],
+                scale: [
+                    1.0 / 10.0,
+                    1.0 / 10.0
+                ],
+            });
+        }
 
         for (mesh, vb, ib, mb, meshlets_count, mdb) in &meshes {
             triangle_count += (mesh.indices.len() / 3) * draw_count;
@@ -288,7 +306,14 @@ fn update(
                     &descriptors,
                 );
 
-                for _ in 0..draw_count {
+                for draw in &draws {
+                    cendre.push_constants(
+                        command_buffer,
+                        &pipeline.layout,
+                        vk::ShaderStageFlags::ALL,
+                        0,
+                        bytemuck::bytes_of(draw),
+                    );
                     cendre.draw_mesh_tasks(command_buffer, meshlets_count.0 / 32, 0);
                 }
             } else {
@@ -301,7 +326,14 @@ fn update(
                     &descriptors,
                 );
                 cendre.bind_index_buffer(command_buffer, ib, 0, vk::IndexType::UINT32);
-                for _ in 0..draw_count {
+                for draw in &draws {
+                    cendre.push_constants(
+                        command_buffer,
+                        &pipeline.layout,
+                        vk::ShaderStageFlags::ALL,
+                        0,
+                        bytemuck::bytes_of(draw),
+                    );
                     cendre.draw_indexed(command_buffer, mesh.indices.len() as u32, 1, 0, 0, 0);
                 }
             }
@@ -329,7 +361,7 @@ fn update(
         let frame_cpu = begin_frame.elapsed().as_secs_f64() * 1000.0;
         *frame_cpu_avg = *frame_cpu_avg * 0.95 + frame_cpu * 0.05;
 
-        let triangles_per_sec = triangle_count as f64 / ((frame_gpu_end - frame_gpu_begin) * 1e-3);
+        let triangles_per_sec = triangle_count as f64 / (*frame_gpu_avg * 1e-3);
 
         window.title = format!(
             "cpu: {:.2} ms gpu: {:.2} ms mesh shading: {} {:.2}B tri/sec",

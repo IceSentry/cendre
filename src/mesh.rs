@@ -16,8 +16,15 @@ pub struct Vertex {
     pub norm: [u8; 4], // u32
     pub uv: [u16; 2],
 }
-
 unsafe impl bytemuck::Pod for Vertex {}
+
+#[repr(C)]
+#[derive(Copy, Clone, Default, bytemuck::Zeroable, Debug)]
+pub struct MeshDraw {
+    pub offset: [f32; 2],
+    pub scale: [f32; 2],
+}
+unsafe impl bytemuck::Pod for MeshDraw {}
 
 #[derive(Component, Debug, Clone)]
 pub struct Mesh {

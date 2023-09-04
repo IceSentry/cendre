@@ -7,10 +7,14 @@
 
 #include "mesh.h"
 
-#define DEBUG 1
+#define DEBUG 0
 
 layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
 layout(triangles, max_vertices = 64, max_primitives = 124) out;
+
+layout(push_constant) uniform block {
+	MeshDraw mesh_draw;
+};
 
 layout(binding = 0) readonly buffer Vertices {
 	Vertex vertices[];
@@ -74,12 +78,13 @@ void main() {
 		) / 127.0 - 1.0;
 		vec2 texcoord = vec2(vertices[vi].tu, vertices[vi].tv);
 
-		vec3 offset = vec3(0.25, -0.75, 0.5);
-		// vec3 offset = vec3(0, 0, 0.5);
-		vec3 scale = vec3(1.0, 1.0, 0.5);
-		// vec3 scale = vec3(1, 1, 0.5);
+		vec3 offset = vec3(mesh_draw.offset[0], mesh_draw.offset[1], 0.0);
+		vec3 scale = vec3(mesh_draw.scale[0], mesh_draw.scale[1], 1.0);
 
-		gl_MeshVerticesNV[i].gl_Position = vec4(position * scale + offset, 1.0);
+		gl_MeshVerticesNV[i].gl_Position = vec4(
+			position * scale + offset * vec3(2.0, 2.0, 0.5) + vec3(-1.0, -1.0, 0.5),
+			1.0
+		);
 #if DEBUG
 		color[i] = vec4(mcolor, 1.0);
 #else

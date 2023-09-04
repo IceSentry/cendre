@@ -459,6 +459,7 @@ impl CendreInstance {
     pub fn create_pipeline_layout(
         &mut self,
         shaders: &[&Shader],
+        push_constant_size: u32,
     ) -> anyhow::Result<PipelineLayout> {
         let mut storage_mask = 0;
         for shader in shaders {
@@ -490,21 +491,30 @@ impl CendreInstance {
             self.device
                 .create_descriptor_set_layout(&create_info, None)?
         };
-
-        let create_info =
+        let mut create_info =
             vk::PipelineLayoutCreateInfo::default().set_layouts(std::slice::from_ref(&set_layout));
+        let mut push_constant_range = vk::PushConstantRange::default();
+        if push_constant_size > 0 {
+            push_constant_range = push_constant_range
+                .size(push_constant_size)
+                .offset(0)
+                .stage_flags(vk::ShaderStageFlags::ALL);
+            create_info =
+                create_info.push_constant_ranges(std::slice::from_ref(&push_constant_range));
+        }
+
         let pipeline_layout = unsafe { self.device.create_pipeline_layout(&create_info, None)? };
 
-        let pipeline_layout = Arc::new(Mutex::new(pipeline_layout));
-        self.pipeline_layouts.push(pipeline_layout.clone());
+        let vk_pipeline_layout = Arc::new(Mutex::new(pipeline_layout));
+        self.pipeline_layouts.push(vk_pipeline_layout.clone());
 
-        let descriptor_set_layout = Arc::new(Mutex::new(set_layout));
+        let vk_descriptor_set_layout = Arc::new(Mutex::new(set_layout));
         self.descriptor_set_layouts
-            .push(descriptor_set_layout.clone());
+            .push(vk_descriptor_set_layout.clone());
 
         Ok(PipelineLayout {
-            vk_pipeline_layout: pipeline_layout,
-            vk_descriptor_set_layout: descriptor_set_layout,
+            vk_pipeline_layout,
+            vk_descriptor_set_layout,
         })
     }
 
@@ -900,6 +910,25 @@ impl CendreInstance {
                 pipeline.vk_pipeline(),
             );
         }
+    }
+
+    pub fn push_constants(
+        &self,
+        command_buffer: vk::CommandBuffer,
+        layout: &PipelineLayout,
+        stage_flags: vk::ShaderStageFlags,
+        offset: u32,
+        constants: &[u8],
+    ) {
+        unsafe {
+            self.device.cmd_push_constants(
+                command_buffer,
+                layout.vk_pipeline_layout(),
+                stage_flags,
+                offset,
+                constants,
+            );
+        };
     }
 }
 

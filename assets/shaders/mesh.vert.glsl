@@ -6,6 +6,10 @@
 
 #include "mesh.h"
 
+layout(push_constant) uniform block {
+	MeshDraw mesh_draw;
+};
+
 layout(binding = 0) readonly buffer Vertices {
 	Vertex vertices[];
 };
@@ -26,12 +30,13 @@ void main() {
     normal = normal / 127.0 - 1.0;
 	vec2 texcoord = vec2(vertices[gl_VertexIndex].tu, vertices[gl_VertexIndex].tv);
 
-    vec3 offset = vec3(0.25, -0.75, 0.5);
-    // vec3 offset = vec3(0, 0, 0.5);
-    vec3 scale = vec3(1.0, 1.0, 0.5);
-    // vec3 scale = vec3(1, 1, 0.5);
+    vec3 offset = vec3(mesh_draw.offset[0], mesh_draw.offset[1], 0.0);
+    vec3 scale = vec3(mesh_draw.scale[0], mesh_draw.scale[1], 1.0);
 
-	gl_Position = vec4(position * scale + offset, 1.0);
+    gl_Position = vec4(
+        position * scale + offset * vec3(2.0, 2.0, 0.5) + vec3(-1.0, -1.0, 0.5),
+        1.0
+    );
 
 	color = vec4(normal * 0.5 + vec3(0.5), 1.0);
 }
