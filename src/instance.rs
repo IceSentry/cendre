@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use ash::{
     extensions::{
         ext::DebugUtils,
@@ -70,6 +70,7 @@ impl Buffer {
     }
 }
 
+#[derive(Clone)]
 pub struct PipelineLayout {
     vk_pipeline_layout: Arc<Mutex<vk::PipelineLayout>>,
     vk_descriptor_set_layout: Arc<Mutex<vk::DescriptorSetLayout>>,
@@ -87,6 +88,7 @@ impl PipelineLayout {
     }
 }
 
+#[derive(Clone)]
 pub struct DescriptorUpdateTemplate {
     vk_descriptor_update_template: Arc<Mutex<vk::DescriptorUpdateTemplate>>,
 }
@@ -108,6 +110,13 @@ impl Pipeline {
     pub fn vk_pipeline(&self) -> vk::Pipeline {
         *self.vk_pipeline.lock().unwrap()
     }
+}
+
+#[derive(Clone)]
+pub struct Program {
+    pub layout: PipelineLayout,
+    pub update_template: DescriptorUpdateTemplate,
+    pub push_constant_stages: vk::ShaderStageFlags,
 }
 
 #[derive(Resource)]
@@ -457,135 +466,18 @@ impl CendreInstance {
         }
     }
 
-    pub fn create_pipeline_layout(
-        &mut self,
-        shaders: &[&Shader],
-        push_constant_size: u32,
-    ) -> anyhow::Result<PipelineLayout> {
-        let mut storage_mask = 0;
-        for shader in shaders {
-            storage_mask |= shader.storage_buffer_mask;
-        }
-        let mut bindings = vec![];
-        for i in 0..32 {
-            if storage_mask & (1 << i) > 0 {
-                let mut stage_flags = vk::ShaderStageFlags::empty();
-                for shader in shaders {
-                    if shader.storage_buffer_mask & (1 << i) > 0 {
-                        stage_flags |= shader.stage;
-                    }
-                }
-                bindings.push(
-                    vk::DescriptorSetLayoutBinding::default()
-                        .binding(i)
-                        .descriptor_count(1)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .stage_flags(stage_flags),
-                );
-            }
-        }
-
-        let set_layout = unsafe {
-            let create_info = vk::DescriptorSetLayoutCreateInfo::default()
-                .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR)
-                .bindings(&bindings);
-            self.device
-                .create_descriptor_set_layout(&create_info, None)?
-        };
-
-        let mut push_constant_range = vk::PushConstantRange::default();
-        if push_constant_size > 0 {
-            let mut stage_flags = vk::ShaderStageFlags::empty();
-            for shader in shaders {
-                if shader.uses_push_constant {
-                    stage_flags |= shader.stage;
-                }
-            }
-            push_constant_range = push_constant_range
-                .size(push_constant_size)
-                .offset(0)
-                .stage_flags(stage_flags);
-        }
-
-        let create_info = vk::PipelineLayoutCreateInfo::default()
-            .set_layouts(std::slice::from_ref(&set_layout))
-            .push_constant_ranges(std::slice::from_ref(&push_constant_range));
-        let pipeline_layout = unsafe { self.device.create_pipeline_layout(&create_info, None)? };
-
-        let vk_pipeline_layout = Arc::new(Mutex::new(pipeline_layout));
-        self.pipeline_layouts.push(vk_pipeline_layout.clone());
-
-        let vk_descriptor_set_layout = Arc::new(Mutex::new(set_layout));
-        self.descriptor_set_layouts
-            .push(vk_descriptor_set_layout.clone());
-
-        Ok(PipelineLayout {
-            vk_pipeline_layout,
-            vk_descriptor_set_layout,
-        })
-    }
-
-    pub fn create_update_template(
-        &mut self,
-        bind_point: vk::PipelineBindPoint,
-        template_type: DescriptorUpdateTemplateType,
-        layout: &PipelineLayout,
-        shaders: &[&Shader],
-    ) -> anyhow::Result<DescriptorUpdateTemplate> {
-        let descriptor_stride = std::mem::size_of::<vk::DescriptorBufferInfo>();
-
-        let mut storage_mask = 0;
-        for shader in shaders {
-            storage_mask |= shader.storage_buffer_mask;
-        }
-
-        let mut entries = vec![];
-        for i in 0..32 {
-            if storage_mask & (1 << i) > 0 {
-                entries.push(
-                    vk::DescriptorUpdateTemplateEntry::default()
-                        .dst_binding(i)
-                        .dst_array_element(0)
-                        .descriptor_count(1)
-                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                        .offset(descriptor_stride * i as usize)
-                        .stride(descriptor_stride),
-                );
-            }
-        }
-        let create_info = vk::DescriptorUpdateTemplateCreateInfo::default()
-            .descriptor_update_entries(&entries)
-            .template_type(template_type)
-            .pipeline_bind_point(bind_point)
-            .pipeline_layout(layout.vk_pipeline_layout());
-
-        let update_template = unsafe {
-            self.device
-                .create_descriptor_update_template(&create_info, None)?
-        };
-        // println!("{update_template:?}");
-        let update_template = Arc::new(Mutex::new(update_template));
-        self.descriptor_update_templates
-            .push(update_template.clone());
-
-        Ok(DescriptorUpdateTemplate {
-            vk_descriptor_update_template: update_template,
-        })
-    }
-
     pub fn push_descriptor_set_with_template(
         &self,
         command_buffer: vk::CommandBuffer,
-        update_template: &DescriptorUpdateTemplate,
-        layout: &PipelineLayout,
+        program: &Program,
         set: u32,
         data: &[vk::DescriptorBufferInfo],
     ) {
         unsafe {
             self.push_descriptor.cmd_push_descriptor_set_with_template(
                 command_buffer,
-                update_template.vk_descriptor_update_template(),
-                layout.vk_pipeline_layout(),
+                program.update_template.vk_descriptor_update_template(),
+                program.layout.vk_pipeline_layout(),
                 set,
                 data.as_ptr().cast(),
             );
@@ -594,7 +486,7 @@ impl CendreInstance {
 
     pub fn create_graphics_pipeline(
         &mut self,
-        pipeline_layout: PipelineLayout,
+        pipeline_layout: &PipelineLayout,
         render_pass: vk::RenderPass,
         stages: &[vk::PipelineShaderStageCreateInfo],
         primitive_topology: vk::PrimitiveTopology,
@@ -653,7 +545,7 @@ impl CendreInstance {
         self.pipelines.push(pipeline.clone());
         Ok(Pipeline {
             vk_pipeline: pipeline,
-            layout: pipeline_layout,
+            layout: pipeline_layout.clone(),
         })
     }
 
@@ -922,20 +814,167 @@ impl CendreInstance {
     pub fn push_constants(
         &self,
         command_buffer: vk::CommandBuffer,
-        layout: &PipelineLayout,
-        stage_flags: vk::ShaderStageFlags,
+        program: &Program,
         offset: u32,
         constants: &[u8],
     ) {
         unsafe {
             self.device.cmd_push_constants(
                 command_buffer,
-                layout.vk_pipeline_layout(),
-                stage_flags,
+                program.layout.vk_pipeline_layout(),
+                program.push_constant_stages,
                 offset,
                 constants,
             );
         };
+    }
+
+    pub fn create_program(
+        &mut self,
+        bind_point: vk::PipelineBindPoint,
+        shaders: &[&Shader],
+        push_constant_size: u32,
+    ) -> anyhow::Result<Program> {
+        let mut push_constant_stages = vk::ShaderStageFlags::empty();
+        for shader in shaders {
+            if shader.uses_push_constant {
+                push_constant_stages |= shader.stage;
+            }
+        }
+
+        let pipeline_layout = self
+            .create_pipeline_layout(shaders, push_constant_size, push_constant_stages)
+            .context("Failed to create pipeline layout for program")?;
+        let update_template = self
+            .create_update_template(
+                bind_point,
+                vk::DescriptorUpdateTemplateType::PUSH_DESCRIPTORS_KHR,
+                &pipeline_layout,
+                shaders,
+            )
+            .context("Failed to create update template for program")?;
+
+        Ok(Program {
+            layout: pipeline_layout,
+            update_template,
+            push_constant_stages,
+        })
+    }
+
+    fn create_pipeline_layout(
+        &mut self,
+        shaders: &[&Shader],
+        push_constant_size: u32,
+        push_constant_stages: vk::ShaderStageFlags,
+    ) -> anyhow::Result<PipelineLayout> {
+        let set_layout = self.create_set_layout(shaders)?;
+
+        let mut push_constant_range = vk::PushConstantRange::default();
+        if push_constant_size > 0 {
+            push_constant_range = push_constant_range
+                .size(push_constant_size)
+                .offset(0)
+                .stage_flags(push_constant_stages);
+        }
+
+        let create_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(std::slice::from_ref(&set_layout))
+            .push_constant_ranges(std::slice::from_ref(&push_constant_range));
+        let pipeline_layout = unsafe { self.device.create_pipeline_layout(&create_info, None)? };
+
+        let vk_pipeline_layout = Arc::new(Mutex::new(pipeline_layout));
+        self.pipeline_layouts.push(vk_pipeline_layout.clone());
+
+        let vk_descriptor_set_layout = Arc::new(Mutex::new(set_layout));
+        self.descriptor_set_layouts
+            .push(vk_descriptor_set_layout.clone());
+
+        Ok(PipelineLayout {
+            vk_pipeline_layout,
+            vk_descriptor_set_layout,
+        })
+    }
+
+    fn create_set_layout(
+        &mut self,
+        shaders: &[&Shader],
+    ) -> anyhow::Result<vk::DescriptorSetLayout> {
+        let mut storage_mask = 0;
+        for shader in shaders {
+            storage_mask |= shader.storage_buffer_mask;
+        }
+        let mut bindings = vec![];
+        for i in 0..32 {
+            if storage_mask & (1 << i) > 0 {
+                let mut stage_flags = vk::ShaderStageFlags::empty();
+                for shader in shaders {
+                    if shader.storage_buffer_mask & (1 << i) > 0 {
+                        stage_flags |= shader.stage;
+                    }
+                }
+                bindings.push(
+                    vk::DescriptorSetLayoutBinding::default()
+                        .binding(i)
+                        .descriptor_count(1)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .stage_flags(stage_flags),
+                );
+            }
+        }
+        let create_info = vk::DescriptorSetLayoutCreateInfo::default()
+            .flags(vk::DescriptorSetLayoutCreateFlags::PUSH_DESCRIPTOR_KHR)
+            .bindings(&bindings);
+        Ok(unsafe {
+            self.device
+                .create_descriptor_set_layout(&create_info, None)?
+        })
+    }
+    fn create_update_template(
+        &mut self,
+        bind_point: vk::PipelineBindPoint,
+        template_type: DescriptorUpdateTemplateType,
+        layout: &PipelineLayout,
+        shaders: &[&Shader],
+    ) -> anyhow::Result<DescriptorUpdateTemplate> {
+        let descriptor_stride = std::mem::size_of::<vk::DescriptorBufferInfo>();
+
+        let mut storage_mask = 0;
+        for shader in shaders {
+            storage_mask |= shader.storage_buffer_mask;
+        }
+
+        let mut entries = vec![];
+        for i in 0..32 {
+            if storage_mask & (1 << i) > 0 {
+                entries.push(
+                    vk::DescriptorUpdateTemplateEntry::default()
+                        .dst_binding(i)
+                        .dst_array_element(0)
+                        .descriptor_count(1)
+                        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                        .offset(descriptor_stride * i as usize)
+                        .stride(descriptor_stride),
+                );
+            }
+        }
+        let create_info = vk::DescriptorUpdateTemplateCreateInfo::default()
+            .descriptor_update_entries(&entries)
+            .template_type(template_type)
+            .pipeline_bind_point(bind_point)
+            .pipeline_layout(layout.vk_pipeline_layout());
+
+        let update_template = unsafe {
+            self.device
+                .create_descriptor_update_template(&create_info, None)?
+        };
+        // println!("{update_template:?}");
+        let update_template = Arc::new(Mutex::new(update_template));
+        self.descriptor_update_templates
+            .push(update_template.clone());
+
+        Ok(DescriptorUpdateTemplate {
+            vk_descriptor_update_template: update_template,
+        })
     }
 }
 

@@ -13,7 +13,7 @@
 
 use std::time::{Duration, Instant};
 
-use ash::vk::{self, DescriptorUpdateTemplateType};
+use ash::vk::{self};
 use bevy::{
     a11y::AccessibilityPlugin,
     app::AppExit,
@@ -25,7 +25,7 @@ use bevy::{
     winit::{WinitPlugin, WinitWindows},
 };
 use cendre::{
-    instance::{CendreInstance, DescriptorUpdateTemplate, Pipeline},
+    instance::{CendreInstance, Pipeline, Program},
     mesh::{
         prepare_mesh, IndexBuffer, Mesh, MeshDraw, MeshletBuffer, MeshletDataBuffer, MeshletsCount,
         VertexBuffer,
@@ -86,11 +86,10 @@ fn load_mesh(mut commands: Commands, asset_server: Res<AssetServer>) {
 pub struct CendrePipeline(pub Pipeline);
 #[derive(Resource)]
 pub struct CendrePipelineRTX(pub Pipeline);
-
 #[derive(Resource, Deref)]
-pub struct CendreMeshUpdateTemplateRTX(pub DescriptorUpdateTemplate);
+pub struct MeshProgram(pub Program);
 #[derive(Resource, Deref)]
-pub struct CendreMeshUpdateTemplate(pub DescriptorUpdateTemplate);
+pub struct MeshProgramRtx(pub Program);
 
 #[allow(clippy::too_many_lines)]
 fn init_cendre(
@@ -128,22 +127,16 @@ fn init_cendre(
         let mesh_shader = cendre.load_shader("assets/shaders/meshlet.mesh.glsl");
         let task_shader = cendre.load_shader("assets/shaders/meshlet.task.glsl");
 
-        let shaders = [&task_shader, &mesh_shader, &fragment_shader];
-        let mesh_layout_rtx = cendre
-            .create_pipeline_layout(&shaders, std::mem::size_of::<MeshDraw>() as u32)
-            .expect("Failed to create pipeline layout for mesh shading");
-        let mesh_update_template_rtx = cendre
-            .create_update_template(
+        let mesh_program_rtx = cendre
+            .create_program(
                 vk::PipelineBindPoint::GRAPHICS,
-                DescriptorUpdateTemplateType::PUSH_DESCRIPTORS_KHR,
-                &mesh_layout_rtx,
-                &shaders,
+                &[&task_shader, &mesh_shader, &fragment_shader],
+                std::mem::size_of::<MeshDraw>() as u32,
             )
-            .unwrap();
-        commands.insert_resource(CendreMeshUpdateTemplateRTX(mesh_update_template_rtx));
+            .expect("Failed to create mesh_program_rtx");
         let pipeline_rtx = cendre
             .create_graphics_pipeline(
-                mesh_layout_rtx,
+                &mesh_program_rtx.layout,
                 cendre.render_pass,
                 &[
                     task_shader.create_info(),
@@ -155,33 +148,28 @@ fn init_cendre(
             )
             .expect("Failed to create graphics pipeline RTX");
         commands.insert_resource(CendrePipelineRTX(pipeline_rtx));
+        commands.insert_resource(MeshProgramRtx(mesh_program_rtx));
     }
 
-    let shaders = [&vertex_shader, &fragment_shader];
-    let mesh_layout = cendre
-        .create_pipeline_layout(&shaders, std::mem::size_of::<MeshDraw>() as u32)
-        .unwrap();
-    let mesh_update_template = cendre
-        .create_update_template(
+    let mesh_program = cendre
+        .create_program(
             vk::PipelineBindPoint::GRAPHICS,
-            DescriptorUpdateTemplateType::PUSH_DESCRIPTORS_KHR,
-            &mesh_layout,
-            &shaders,
+            &[&vertex_shader, &fragment_shader],
+            std::mem::size_of::<MeshDraw>() as u32,
         )
-        .unwrap();
-    commands.insert_resource(CendreMeshUpdateTemplate(mesh_update_template));
-
+        .expect("Failed to create mesh_program");
     let pipeline = cendre
         .create_graphics_pipeline(
-            mesh_layout,
+            &mesh_program.layout,
             cendre.render_pass,
             &[vertex_shader.create_info(), fragment_shader.create_info()],
             vk::PrimitiveTopology::TRIANGLE_LIST,
             pipeline_rasterization_state_create_info,
         )
         .expect("Failed to create graphics pipeline");
-
     commands.insert_resource(CendrePipeline(pipeline));
+    commands.insert_resource(MeshProgram(mesh_program));
+
     commands.insert_resource(cendre);
 
     info!("Pipeline created");
@@ -204,8 +192,8 @@ fn update(
     mut frame_gpu_avg: Local<f64>,
     mut frame_cpu_avg: Local<f64>,
     rtx_enabled: Res<RTXEnabled>,
-    mesh_update_template_rtx: Res<CendreMeshUpdateTemplateRTX>,
-    mesh_update_template: Res<CendreMeshUpdateTemplate>,
+    mesh_program_rtx: Res<MeshProgramRtx>,
+    mesh_program: Res<MeshProgram>,
 ) {
     let begin_frame = Instant::now();
 
@@ -262,7 +250,6 @@ fn update(
         cendre.bind_pipeline(command_buffer, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
         let draw_count = 100;
-        // let draw_count = 1;
 
         let mut draws = Vec::new();
         for i in 0..draw_count {
@@ -300,8 +287,7 @@ fn update(
                 ];
                 cendre.push_descriptor_set_with_template(
                     command_buffer,
-                    &mesh_update_template_rtx,
-                    &pipeline.layout,
+                    &mesh_program_rtx,
                     0,
                     &descriptors,
                 );
@@ -309,8 +295,7 @@ fn update(
                 for draw in &draws {
                     cendre.push_constants(
                         command_buffer,
-                        &pipeline.layout,
-                        vk::ShaderStageFlags::MESH_NV,
+                        &mesh_program_rtx,
                         0,
                         bytemuck::bytes_of(draw),
                     );
@@ -320,8 +305,7 @@ fn update(
                 let descriptors = [vb.descriptor_info(0)];
                 cendre.push_descriptor_set_with_template(
                     command_buffer,
-                    &mesh_update_template,
-                    &pipeline.layout,
+                    &mesh_program,
                     0,
                     &descriptors,
                 );
@@ -329,8 +313,7 @@ fn update(
                 for draw in &draws {
                     cendre.push_constants(
                         command_buffer,
-                        &pipeline.layout,
-                        vk::ShaderStageFlags::VERTEX,
+                        &mesh_program,
                         0,
                         bytemuck::bytes_of(draw),
                     );
