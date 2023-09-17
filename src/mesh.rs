@@ -159,7 +159,7 @@ pub fn prepare_mesh(
                 gpu_allocator::MemoryLocation::GpuOnly,
             )
             .unwrap();
-        cendre.updload_buffer(
+        cendre.upload_buffer(
             cendre.command_buffers[0],
             &mut scratch_buffer,
             &vertex_buffer,
@@ -174,7 +174,7 @@ pub fn prepare_mesh(
                 gpu_allocator::MemoryLocation::GpuOnly,
             )
             .unwrap();
-        cendre.updload_buffer(
+        cendre.upload_buffer(
             cendre.command_buffers[0],
             &mut scratch_buffer,
             &index_buffer,
@@ -219,13 +219,13 @@ pub fn prepare_mesh(
                 )
                 .unwrap();
 
-            cendre.updload_buffer(
+            cendre.upload_buffer(
                 cendre.command_buffers[0],
                 &mut scratch_buffer,
                 &meshlet_buffer,
                 &data,
             );
-            cendre.updload_buffer(
+            cendre.upload_buffer(
                 cendre.command_buffers[0],
                 &mut scratch_buffer,
                 &meshlet_data_buffer,

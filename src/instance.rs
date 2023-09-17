@@ -24,7 +24,7 @@ use gpu_allocator::{
 use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 use crate::{
-    c_char_buf_to_string, image_barrier,
+    c_char_buf_to_string, create_image_view, image_barrier,
     shaders::{compile_shader, create_shader_module, parse_spirv, Shader},
     swapchain::CendreSwapchain,
 };
@@ -119,6 +119,24 @@ pub struct Program {
     pub push_constant_stages: vk::ShaderStageFlags,
 }
 
+pub struct Image {
+    vk_image: Arc<Mutex<vk::Image>>,
+    vk_image_view: Arc<Mutex<vk::ImageView>>,
+    allocation: Arc<Mutex<Option<Allocation>>>,
+}
+
+impl Image {
+    #[must_use]
+    pub fn vk_image(&self) -> vk::Image {
+        *self.vk_image.lock().unwrap()
+    }
+
+    #[must_use]
+    pub fn vk_image_view(&self) -> vk::ImageView {
+        *self.vk_image_view.lock().unwrap()
+    }
+}
+
 #[derive(Resource)]
 pub struct CendreInstance {
     pub instance: Instance,
@@ -145,6 +163,8 @@ pub struct CendreInstance {
     descriptor_set_layouts: Vec<Arc<Mutex<vk::DescriptorSetLayout>>>,
     descriptor_update_templates: Vec<Arc<Mutex<vk::DescriptorUpdateTemplate>>>,
     shader_modules: Vec<Arc<Mutex<vk::ShaderModule>>>,
+    images: Vec<Arc<Mutex<vk::Image>>>,
+    image_views: Vec<Arc<Mutex<vk::ImageView>>>,
     allocator: std::mem::ManuallyDrop<Allocator>,
     allocations: Vec<Arc<Mutex<Option<Allocation>>>>,
     buffers: Vec<Arc<Mutex<vk::Buffer>>>,
@@ -259,6 +279,7 @@ impl CendreInstance {
         info!("render pass created");
 
         let swapchain_loader = Swapchain::new(&instance, &device);
+
         let swapchain = CendreSwapchain::new(
             &device,
             &swapchain_loader,
@@ -332,6 +353,8 @@ impl CendreInstance {
             descriptor_set_layouts: vec![],
             descriptor_update_templates: vec![],
             shader_modules: vec![],
+            images: vec![],
+            image_views: vec![],
             allocator: std::mem::ManuallyDrop::new(allocator),
             allocations: vec![],
             buffers: vec![],
@@ -347,7 +370,7 @@ impl CendreInstance {
         location: MemoryLocation,
     ) -> anyhow::Result<Buffer> {
         let vk_info = vk::BufferCreateInfo::default().size(size).usage(usage);
-        let buffer = unsafe { self.device.create_buffer(&vk_info, None) }.unwrap();
+        let buffer = unsafe { self.device.create_buffer(&vk_info, None)? };
         let requirements = unsafe { self.device.get_buffer_memory_requirements(buffer) };
         let allocation = self.allocator.allocate(&AllocationCreateDesc {
             name: &format!("usage: {usage:?} size: {size} "),
@@ -360,8 +383,7 @@ impl CendreInstance {
         // Bind memory to the buffer
         unsafe {
             self.device
-                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
-                .unwrap();
+                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())?;
         };
 
         let buffer_raw = Arc::new(Mutex::new(buffer));
@@ -377,7 +399,7 @@ impl CendreInstance {
         })
     }
 
-    pub fn updload_buffer(
+    pub fn upload_buffer(
         &self,
         command_buffer: vk::CommandBuffer,
         scratch_buffer: &mut Buffer,
@@ -861,6 +883,62 @@ impl CendreInstance {
         })
     }
 
+    pub fn create_image(
+        &mut self,
+        width: u32,
+        height: u32,
+        format: vk::Format,
+        usage: vk::ImageUsageFlags,
+        memory_location: MemoryLocation,
+    ) -> anyhow::Result<Image> {
+        let create_info = vk::ImageCreateInfo::default()
+            .image_type(vk::ImageType::TYPE_2D)
+            .format(format)
+            .extent(vk::Extent3D {
+                width,
+                height,
+                depth: 1,
+            })
+            .mip_levels(1)
+            .array_layers(1)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(usage)
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+
+        let image = unsafe { self.device.create_image(&create_info, None)? };
+        let requirements = unsafe { self.device.get_image_memory_requirements(image) };
+
+        let allocation = self.allocator.allocate(&AllocationCreateDesc {
+            name: &format!("image size: {width}x{height}"),
+            requirements,
+            location: memory_location,
+            linear: true,
+            allocation_scheme: AllocationScheme::GpuAllocatorManaged,
+        })?;
+
+        unsafe {
+            self.device
+                .bind_image_memory(image, allocation.memory(), allocation.offset())?;
+        };
+
+        let image_view = create_image_view(&self.device, format, image)?;
+
+        let vk_image = Arc::new(Mutex::new(image));
+        let vk_image_view = Arc::new(Mutex::new(image_view));
+        let allocation = Arc::new(Mutex::new(Some(allocation)));
+
+        self.images.push(vk_image.clone());
+        self.image_views.push(vk_image_view.clone());
+        self.allocations.push(allocation.clone());
+
+        Ok(Image {
+            vk_image,
+            vk_image_view,
+            allocation,
+        })
+    }
+
     fn create_pipeline_layout(
         &mut self,
         shaders: &[&Shader],
@@ -1028,6 +1106,15 @@ impl Drop for CendreInstance {
             for module in &self.shader_modules {
                 self.device
                     .destroy_shader_module(*module.lock().unwrap(), None);
+            }
+
+            for image in &self.images {
+                self.device.destroy_image(*image.lock().unwrap(), None);
+            }
+
+            for image_view in &self.image_views {
+                self.device
+                    .destroy_image_view(*image_view.lock().unwrap(), None);
             }
 
             self.device.destroy_render_pass(self.render_pass, None);

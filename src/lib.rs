@@ -20,7 +20,7 @@ pub mod swapchain;
 
 use std::{borrow::Cow, ffi::CStr, os::raw::c_char};
 
-use ash::vk;
+use ash::{vk, Device};
 use bevy::prelude::*;
 
 #[derive(Resource)]
@@ -51,4 +51,27 @@ fn image_barrier<'a>(
 
 unsafe fn c_char_buf_to_string<'a>(buf: *const c_char) -> Cow<'a, str> {
     unsafe { CStr::from_ptr(buf) }.to_string_lossy()
+}
+
+fn create_image_view(
+    device: &Device,
+    format: vk::Format,
+    image: vk::Image,
+) -> anyhow::Result<vk::ImageView> {
+    let aspect_mask = if format == vk::Format::D32_SFLOAT {
+        vk::ImageAspectFlags::DEPTH
+    } else {
+        vk::ImageAspectFlags::COLOR
+    };
+    let create_view_info = vk::ImageViewCreateInfo::default()
+        .view_type(vk::ImageViewType::TYPE_2D)
+        .format(format)
+        .subresource_range(
+            vk::ImageSubresourceRange::default()
+                .aspect_mask(aspect_mask)
+                .layer_count(1)
+                .level_count(1),
+        )
+        .image(image);
+    Ok(unsafe { device.create_image_view(&create_view_info, None)? })
 }

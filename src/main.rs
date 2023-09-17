@@ -34,7 +34,7 @@ use cendre::{
     MeshShaderEnabled,
 };
 
-pub const OBJ_PATH: &str = "models/kitten.obj";
+pub const OBJ_PATH: &str = "models/bunny.obj";
 pub const VSYNC: bool = false;
 
 fn main() {
@@ -112,6 +112,8 @@ fn init_cendre(
         },
     );
     info!("Instance created");
+
+    // let color_target = cendre.create_image(cendre.swapchain.width, cendre.swapchain.height, cendre.swapchain, usage, memory_location);
 
     let vertex_shader = cendre.load_shader("assets/shaders/mesh.vert.glsl");
     let fragment_shader = cendre.load_shader("assets/shaders/mesh.frag.glsl");
@@ -367,7 +369,7 @@ fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreInsta
             // FIXME: this will break with multiple windows
             return;
         }
-        cendre.swapchain = cendre.swapchain.resize(
+        cendre.swapchain = cendre.swapchain.recreate(
             &cendre.device,
             &cendre.swapchain_loader,
             &cendre.surface_loader,

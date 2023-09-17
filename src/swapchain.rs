@@ -4,6 +4,8 @@ use ash::{
     Device,
 };
 
+use crate::create_image_view;
+
 // TODO could also hold present_queue and swapchain_loader
 // This would make it possible to use it for submit/present
 pub struct CendreSwapchain {
@@ -102,7 +104,7 @@ impl CendreSwapchain {
         let images = unsafe { swapchain_loader.get_swapchain_images(swapchain).unwrap() };
         let image_views: Vec<vk::ImageView> = images
             .iter()
-            .map(|&image| create_image_view(device, surface_format, image).unwrap())
+            .map(|&image| create_image_view(device, surface_format.format, image).unwrap())
             .collect();
 
         let framebuffers = image_views
@@ -125,7 +127,7 @@ impl CendreSwapchain {
     }
 
     #[must_use]
-    pub fn resize(
+    pub fn recreate(
         &self,
         device: &Device,
         swapchain_loader: &Swapchain,
@@ -169,30 +171,6 @@ impl CendreSwapchain {
 
         unsafe { swapchain_loader.destroy_swapchain(self.swapchain, None) };
     }
-}
-
-fn create_image_view(
-    device: &Device,
-    surface_format: vk::SurfaceFormatKHR,
-    image: vk::Image,
-) -> anyhow::Result<vk::ImageView> {
-    let create_view_info = vk::ImageViewCreateInfo::default()
-        .view_type(vk::ImageViewType::TYPE_2D)
-        .format(surface_format.format)
-        .components(vk::ComponentMapping {
-            r: vk::ComponentSwizzle::R,
-            g: vk::ComponentSwizzle::G,
-            b: vk::ComponentSwizzle::B,
-            a: vk::ComponentSwizzle::A,
-        })
-        .subresource_range(
-            vk::ImageSubresourceRange::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .layer_count(1)
-                .level_count(1),
-        )
-        .image(image);
-    Ok(unsafe { device.create_image_view(&create_view_info, None)? })
 }
 
 fn create_frame_buffer(
