@@ -26,7 +26,6 @@ use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 use crate::{
     c_char_buf_to_string, create_image_view, image_barrier,
     shaders::{compile_shader, create_shader_module, parse_spirv, Shader},
-    swapchain::CendreSwapchain,
 };
 
 pub struct Buffer {
@@ -147,7 +146,13 @@ pub struct CendreInstance {
     pub debug_utils: DebugUtils,
     pub debug_utils_messenger: vk::DebugUtilsMessengerEXT,
     pub swapchain_loader: Swapchain,
-    pub swapchain: CendreSwapchain,
+    pub swapchain_khr: vk::SwapchainKHR,
+    pub swapchain_images: Vec<vk::Image>,
+    pub swapchain_image_views: Vec<vk::ImageView>,
+    pub swapchain_width: u32,
+    pub swapchain_height: u32,
+    pub framebuffers: Vec<vk::Framebuffer>,
+    pub present_mode: vk::PresentModeKHR,
     pub surface_loader: Surface,
     pub surface: vk::SurfaceKHR,
     pub surface_format: vk::SurfaceFormatKHR,
@@ -280,21 +285,33 @@ impl CendreInstance {
 
         let swapchain_loader = Swapchain::new(&instance, &device);
 
-        let swapchain = CendreSwapchain::new(
-            &device,
+        let swapchain_width = winit_window.inner_size().width;
+        let swapchain_height = winit_window.inner_size().height;
+
+        let swapchain_khr = create_swapchain_khr(
             &swapchain_loader,
             &surface_loader,
             surface,
             surface_format,
             physical_device,
-            winit_window.inner_size().width,
-            winit_window.inner_size().height,
-            render_pass,
+            swapchain_width,
+            swapchain_height,
             None,
             present_mode,
-        );
-
+        )
+        .expect("Failed to create swapchain");
         info!("swapchain created");
+
+        let (swapchain_images, swapchain_image_views, framebuffers) = create_swapchain_resources(
+            &device,
+            &swapchain_loader,
+            swapchain_khr,
+            render_pass,
+            surface_format,
+            swapchain_width,
+            swapchain_height,
+        );
+        info!("swapchain resources created");
 
         let create_info = vk::QueryPoolCreateInfo::default()
             .query_type(vk::QueryType::TIMESTAMP)
@@ -337,7 +354,13 @@ impl CendreInstance {
             debug_utils,
             debug_utils_messenger,
             swapchain_loader,
-            swapchain,
+            swapchain_khr,
+            swapchain_images,
+            swapchain_image_views,
+            swapchain_width,
+            swapchain_height,
+            framebuffers,
+            present_mode,
             surface_loader,
             surface,
             surface_format,
@@ -579,7 +602,7 @@ impl CendreInstance {
         let (image_index, _) = unsafe {
             self.swapchain_loader
                 .acquire_next_image(
-                    self.swapchain.swapchain,
+                    self.swapchain_khr,
                     0,
                     self.acquire_semaphore,
                     vk::Fence::null(),
@@ -616,7 +639,7 @@ impl CendreInstance {
 
         unsafe {
             let render_begin_barrier = image_barrier(
-                self.swapchain.images[image_index as usize],
+                self.swapchain_images[image_index as usize],
                 vk::AccessFlags::empty(),
                 vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
                 vk::ImageLayout::UNDEFINED,
@@ -641,7 +664,7 @@ impl CendreInstance {
 
         unsafe {
             let render_end_barrier = image_barrier(
-                self.swapchain.images[image_index as usize],
+                self.swapchain_images[image_index as usize],
                 vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
                 vk::AccessFlags::empty(),
                 vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
@@ -737,7 +760,7 @@ impl CendreInstance {
         let release_semaphores = [self.release_semaphore];
         unsafe {
             let present_info = vk::PresentInfoKHR::default()
-                .swapchains(std::slice::from_ref(&self.swapchain.swapchain))
+                .swapchains(std::slice::from_ref(&self.swapchain_khr))
                 .image_indices(std::slice::from_ref(&image_index))
                 .wait_semaphores(&release_semaphores);
             self.swapchain_loader
@@ -939,6 +962,53 @@ impl CendreInstance {
         })
     }
 
+    pub fn recreate_swapchain(&mut self, width: u32, height: u32) {
+        let new_swapchain_khr = create_swapchain_khr(
+            &self.swapchain_loader,
+            &self.surface_loader,
+            self.surface,
+            self.surface_format,
+            self.physical_device,
+            width,
+            height,
+            Some(self.swapchain_khr),
+            self.present_mode,
+        )
+        .expect("Failed to create swapchain");
+        let (swapchain_images, swapchain_image_views, framebuffers) = create_swapchain_resources(
+            &self.device,
+            &self.swapchain_loader,
+            self.swapchain_khr,
+            self.render_pass,
+            self.surface_format,
+            width,
+            height,
+        );
+
+        unsafe { self.device.device_wait_idle().unwrap() };
+        self.destroy_swapchain();
+
+        self.swapchain_khr = new_swapchain_khr;
+        self.swapchain_images = swapchain_images;
+        self.swapchain_image_views = swapchain_image_views;
+        self.framebuffers = framebuffers;
+    }
+
+    fn destroy_swapchain(&mut self) {
+        unsafe {
+            for framebuffer in &self.framebuffers {
+                self.device.destroy_framebuffer(*framebuffer, None);
+            }
+
+            for image_view in &self.swapchain_image_views {
+                self.device.destroy_image_view(*image_view, None);
+            }
+
+            self.swapchain_loader
+                .destroy_swapchain(self.swapchain_khr, None);
+        }
+    }
+
     fn create_pipeline_layout(
         &mut self,
         shaders: &[&Shader],
@@ -1077,7 +1147,7 @@ impl Drop for CendreInstance {
             // need to drop the allocator before the device gets destroyed
             std::mem::ManuallyDrop::drop(&mut self.allocator);
 
-            self.swapchain.destroy(&self.device, &self.swapchain_loader);
+            self.destroy_swapchain();
 
             for pipeline in &self.pipelines {
                 self.device
@@ -1107,9 +1177,12 @@ impl Drop for CendreInstance {
                 self.device
                     .destroy_shader_module(*module.lock().unwrap(), None);
             }
-
             for image in &self.images {
                 self.device.destroy_image(*image.lock().unwrap(), None);
+            }
+
+            for image in &self.swapchain_images {
+                self.device.destroy_image(*image, None);
             }
 
             for image_view in &self.image_views {
@@ -1362,4 +1435,120 @@ fn create_command_pool(device: &Device, queue_family_index: u32) -> vk::CommandP
 fn create_semaphore(device: &Device) -> anyhow::Result<vk::Semaphore> {
     let semaphore_create_info = vk::SemaphoreCreateInfo::default();
     Ok(unsafe { device.create_semaphore(&semaphore_create_info, None)? })
+}
+
+fn create_swapchain_khr(
+    swapchain_loader: &Swapchain,
+    surface_loader: &Surface,
+    surface: vk::SurfaceKHR,
+    surface_format: vk::SurfaceFormatKHR,
+    physical_device: vk::PhysicalDevice,
+    width: u32,
+    height: u32,
+    old_swapchain: Option<vk::SwapchainKHR>,
+    present_mode: vk::PresentModeKHR,
+) -> anyhow::Result<vk::SwapchainKHR> {
+    let surface_capabilities = unsafe {
+        surface_loader.get_physical_device_surface_capabilities(physical_device, surface)?
+    };
+
+    let mut desired_image_count = surface_capabilities.min_image_count + 1;
+    if surface_capabilities.max_image_count > 0
+        && desired_image_count > surface_capabilities.max_image_count
+    {
+        desired_image_count = surface_capabilities.max_image_count;
+    }
+
+    let surface_resolution = match surface_capabilities.current_extent.width {
+        std::u32::MAX => vk::Extent2D { width, height },
+        _ => surface_capabilities.current_extent,
+    };
+
+    let pre_transform = if surface_capabilities
+        .supported_transforms
+        .contains(vk::SurfaceTransformFlagsKHR::IDENTITY)
+    {
+        vk::SurfaceTransformFlagsKHR::IDENTITY
+    } else {
+        surface_capabilities.current_transform
+    };
+
+    let composite_alpha = match surface_capabilities.supported_composite_alpha {
+        vk::CompositeAlphaFlagsKHR::OPAQUE
+        | vk::CompositeAlphaFlagsKHR::PRE_MULTIPLIED
+        | vk::CompositeAlphaFlagsKHR::POST_MULTIPLIED => {
+            surface_capabilities.supported_composite_alpha
+        }
+        _ => vk::CompositeAlphaFlagsKHR::INHERIT,
+    };
+
+    let present_modes = unsafe {
+        surface_loader.get_physical_device_surface_present_modes(physical_device, surface)?
+    };
+    let present_mode = present_modes
+        .iter()
+        .copied()
+        .find(|&mode| mode == present_mode)
+        .unwrap_or(vk::PresentModeKHR::FIFO);
+
+    let mut swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
+        .surface(surface)
+        .min_image_count(desired_image_count)
+        .image_format(surface_format.format)
+        .image_color_space(surface_format.color_space)
+        .image_extent(surface_resolution)
+        .image_array_layers(1)
+        .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+        .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
+        .pre_transform(pre_transform)
+        .composite_alpha(composite_alpha)
+        .present_mode(present_mode);
+    if let Some(old_swapchain) = old_swapchain {
+        swapchain_create_info.old_swapchain = old_swapchain;
+    }
+    let swapchain = unsafe { swapchain_loader.create_swapchain(&swapchain_create_info, None)? };
+    Ok(swapchain)
+}
+
+fn create_swapchain_resources(
+    device: &Device,
+    swapchain_loader: &Swapchain,
+    swapchain_khr: vk::SwapchainKHR,
+    render_pass: vk::RenderPass,
+    surface_format: vk::SurfaceFormatKHR,
+    width: u32,
+    height: u32,
+) -> (Vec<vk::Image>, Vec<vk::ImageView>, Vec<vk::Framebuffer>) {
+    let mut swapchain_image_views = vec![];
+    let mut framebuffers = vec![];
+    let swapchain_images = unsafe {
+        swapchain_loader
+            .get_swapchain_images(swapchain_khr)
+            .expect("Failed to get swapchain images")
+    };
+    for image in &swapchain_images {
+        let image_view = create_image_view(device, surface_format.format, *image)
+            .expect("Failed to create image view for swapchain image");
+        let fb = create_frame_buffer(device, render_pass, image_view, width, height)
+            .expect("Failed to create frame buffer");
+        swapchain_image_views.push(image_view);
+        framebuffers.push(fb);
+    }
+    (swapchain_images, swapchain_image_views, framebuffers)
+}
+
+fn create_frame_buffer(
+    device: &Device,
+    render_pass: vk::RenderPass,
+    image_view: vk::ImageView,
+    width: u32,
+    height: u32,
+) -> anyhow::Result<vk::Framebuffer> {
+    let create_info = vk::FramebufferCreateInfo::default()
+        .render_pass(render_pass)
+        .attachments(std::slice::from_ref(&image_view))
+        .width(width)
+        .height(height)
+        .layers(1);
+    Ok(unsafe { device.create_framebuffer(&create_info, None)? })
 }

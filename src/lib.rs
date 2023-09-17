@@ -16,7 +16,6 @@ pub mod instance;
 pub mod mesh;
 pub mod obj_loader;
 pub mod shaders;
-pub mod swapchain;
 
 use std::{borrow::Cow, ffi::CStr, os::raw::c_char};
 

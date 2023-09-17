@@ -219,10 +219,10 @@ fn update(
     };
     let render_pass_begin_info = vk::RenderPassBeginInfo::default()
         .render_pass(cendre.render_pass)
-        .framebuffer(cendre.swapchain.framebuffers[image_index as usize])
+        .framebuffer(cendre.framebuffers[image_index as usize])
         .render_area(vk::Rect2D::default().extent(vk::Extent2D {
-            width: cendre.swapchain.width,
-            height: cendre.swapchain.height,
+            width: cendre.swapchain_width,
+            height: cendre.swapchain_height,
         }))
         .clear_values(std::slice::from_ref(&clear_color));
     unsafe {
@@ -363,24 +363,13 @@ fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreInsta
         return;
     }
     for event in &mut events {
-        if cendre.swapchain.width == event.width as u32
-            && cendre.swapchain.height == event.height as u32
+        if cendre.swapchain_width == event.width as u32
+            && cendre.swapchain_height == event.height as u32
         {
             // FIXME: this will break with multiple windows
             return;
         }
-        cendre.swapchain = cendre.swapchain.recreate(
-            &cendre.device,
-            &cendre.swapchain_loader,
-            &cendre.surface_loader,
-            cendre.surface,
-            cendre.surface_format,
-            cendre.physical_device,
-            event.width as u32,
-            event.height as u32,
-            cendre.render_pass,
-            cendre.swapchain.present_mode,
-        );
+        cendre.recreate_swapchain(event.width as u32, event.height as u32);
     }
 }
 
