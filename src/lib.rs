@@ -24,7 +24,7 @@ use ash::vk;
 use bevy::prelude::*;
 
 #[derive(Resource)]
-pub struct RTXEnabled(pub bool);
+pub struct MeshShaderEnabled(pub bool);
 
 fn image_barrier<'a>(
     image: vk::Image,

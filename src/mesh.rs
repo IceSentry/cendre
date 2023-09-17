@@ -182,7 +182,7 @@ pub fn prepare_mesh(
         );
         entity_cmd.insert(IndexBuffer(index_buffer));
 
-        if cendre.rtx_supported {
+        if cendre.mesh_shader_supported {
             // TODO build meshlets on load
             let (meshlets, meshlet_data) = build_meshlets(&mesh.vertices, &mesh.indices);
             info!("Meshlets: {}", meshlets.len());

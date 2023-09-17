@@ -149,7 +149,7 @@ pub struct CendreInstance {
     allocations: Vec<Arc<Mutex<Option<Allocation>>>>,
     buffers: Vec<Arc<Mutex<vk::Buffer>>>,
     query_pool: vk::QueryPool,
-    pub rtx_supported: bool,
+    pub mesh_shader_supported: bool,
 }
 
 impl CendreInstance {
@@ -184,14 +184,14 @@ impl CendreInstance {
                 .unwrap()
         };
 
-        let mut rtx_supported = false;
+        let mut mesh_shader_supported = false;
         if extension_properties
             .iter()
             .map(|x| unsafe { CStr::from_ptr(x.extension_name.as_ptr()) })
             .any(|ext_name| ext_name == MeshShader::NAME)
         {
-            info!("RTX supported");
-            rtx_supported = true;
+            info!("mesh shader supported");
+            mesh_shader_supported = true;
         }
 
         let props = unsafe { instance.get_physical_device_properties(physical_device) };
@@ -207,7 +207,7 @@ impl CendreInstance {
             unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_KHR_16bit_storage\0").as_ptr() },
             unsafe { CStr::from_bytes_with_nul_unchecked(b"VK_KHR_8bit_storage\0").as_ptr() },
         ];
-        if rtx_supported {
+        if mesh_shader_supported {
             extension_names.push(MeshShader::NAME.as_ptr());
         }
 
@@ -234,7 +234,7 @@ impl CendreInstance {
         let mut mesh_shader_features_nv = vk::PhysicalDeviceMeshShaderFeaturesNV::default()
             .mesh_shader(true)
             .task_shader(true);
-        if rtx_supported {
+        if mesh_shader_supported {
             device_create_info = device_create_info.push_next(&mut mesh_shader_features_nv);
         }
 
@@ -336,7 +336,7 @@ impl CendreInstance {
             allocations: vec![],
             buffers: vec![],
             query_pool,
-            rtx_supported,
+            mesh_shader_supported,
         }
     }
 

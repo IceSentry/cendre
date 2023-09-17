@@ -31,7 +31,7 @@ use cendre::{
         VertexBuffer,
     },
     obj_loader::{ObjBundle, ObjLoaderPlugin},
-    RTXEnabled,
+    MeshShaderEnabled,
 };
 
 pub const OBJ_PATH: &str = "models/kitten.obj";
@@ -39,7 +39,7 @@ pub const VSYNC: bool = false;
 
 fn main() {
     App::new()
-        .insert_resource(RTXEnabled(true))
+        .insert_resource(MeshShaderEnabled(true))
         .add_plugins((
             MinimalPlugins,
             WindowPlugin {
@@ -66,7 +66,7 @@ fn main() {
         ))
         .add_systems(Startup, (init_cendre, load_mesh))
         .add_systems(Update, (resize, update).chain())
-        .add_systems(Update, (prepare_mesh, toggle_rtx, exit_on_esc))
+        .add_systems(Update, (prepare_mesh, toggle_mesh_shader, exit_on_esc))
         .run();
 }
 
@@ -85,11 +85,11 @@ fn load_mesh(mut commands: Commands, asset_server: Res<AssetServer>) {
 #[derive(Resource)]
 pub struct CendrePipeline(pub Pipeline);
 #[derive(Resource)]
-pub struct CendrePipelineRTX(pub Pipeline);
+pub struct CendrePipelineMeshShader(pub Pipeline);
 #[derive(Resource, Deref)]
 pub struct MeshProgram(pub Program);
 #[derive(Resource, Deref)]
-pub struct MeshProgramRtx(pub Program);
+pub struct MeshProgramMeshShader(pub Program);
 
 #[allow(clippy::too_many_lines)]
 fn init_cendre(
@@ -123,20 +123,20 @@ fn init_cendre(
             .cull_mode(vk::CullModeFlags::BACK)
             .line_width(1.0);
 
-    if cendre.rtx_supported {
+    if cendre.mesh_shader_supported {
         let mesh_shader = cendre.load_shader("assets/shaders/meshlet.mesh.glsl");
         let task_shader = cendre.load_shader("assets/shaders/meshlet.task.glsl");
 
-        let mesh_program_rtx = cendre
+        let mesh_program_mesh_shader = cendre
             .create_program(
                 vk::PipelineBindPoint::GRAPHICS,
                 &[&task_shader, &mesh_shader, &fragment_shader],
                 std::mem::size_of::<MeshDraw>() as u32,
             )
-            .expect("Failed to create mesh_program_rtx");
-        let pipeline_rtx = cendre
+            .expect("Failed to create mesh_program_mesh_shader");
+        let pipeline_mesh_shader = cendre
             .create_graphics_pipeline(
-                &mesh_program_rtx.layout,
+                &mesh_program_mesh_shader.layout,
                 cendre.render_pass,
                 &[
                     task_shader.create_info(),
@@ -146,9 +146,9 @@ fn init_cendre(
                 vk::PrimitiveTopology::TRIANGLE_LIST,
                 pipeline_rasterization_state_create_info,
             )
-            .expect("Failed to create graphics pipeline RTX");
-        commands.insert_resource(CendrePipelineRTX(pipeline_rtx));
-        commands.insert_resource(MeshProgramRtx(mesh_program_rtx));
+            .expect("Failed to create graphics pipeline mesh shader");
+        commands.insert_resource(CendrePipelineMeshShader(pipeline_mesh_shader));
+        commands.insert_resource(MeshProgramMeshShader(mesh_program_mesh_shader));
     }
 
     let mesh_program = cendre
@@ -179,7 +179,7 @@ fn init_cendre(
 fn update(
     cendre: Res<CendreInstance>,
     cendre_pipeline: Res<CendrePipeline>,
-    cendre_pipeline_rtx: Option<Res<CendrePipelineRTX>>,
+    cendre_pipeline_mesh_shader: Option<Res<CendrePipelineMeshShader>>,
     mut windows: Query<&mut Window>,
     meshes: Query<(
         &Mesh,
@@ -191,13 +191,13 @@ fn update(
     )>,
     mut frame_gpu_avg: Local<f64>,
     mut frame_cpu_avg: Local<f64>,
-    rtx_enabled: Res<RTXEnabled>,
-    mesh_program_rtx: Res<MeshProgramRtx>,
+    mesh_shader_enabled: Res<MeshShaderEnabled>,
+    mesh_program_mesh_shader: Res<MeshProgramMeshShader>,
     mesh_program: Res<MeshProgram>,
 ) {
     let begin_frame = Instant::now();
 
-    let rtx = cendre.rtx_supported && rtx_enabled.0;
+    let mesh_shader = cendre.mesh_shader_supported && mesh_shader_enabled.0;
 
     let mut window = windows.single_mut();
 
@@ -242,8 +242,8 @@ fn update(
         let height = window.physical_height();
         cendre.set_viewport(command_buffer, width, height);
 
-        let pipeline = if rtx {
-            &cendre_pipeline_rtx.as_ref().unwrap().0
+        let pipeline = if mesh_shader {
+            &cendre_pipeline_mesh_shader.as_ref().unwrap().0
         } else {
             &cendre_pipeline.0
         };
@@ -269,7 +269,7 @@ fn update(
         for (mesh, vb, ib, mb, meshlets_count, mdb) in &meshes {
             triangle_count += (mesh.indices.len() / 3) * draw_count;
 
-            if rtx {
+            if mesh_shader {
                 let Some(mb) = mb else {
                     continue;
                 };
@@ -287,7 +287,7 @@ fn update(
                 ];
                 cendre.push_descriptor_set_with_template(
                     command_buffer,
-                    &mesh_program_rtx,
+                    &mesh_program_mesh_shader,
                     0,
                     &descriptors,
                 );
@@ -295,7 +295,7 @@ fn update(
                 for draw in &draws {
                     cendre.push_constants(
                         command_buffer,
-                        &mesh_program_rtx,
+                        &mesh_program_mesh_shader,
                         0,
                         bytemuck::bytes_of(draw),
                     );
@@ -350,7 +350,7 @@ fn update(
             "cpu: {:.2} ms gpu: {:.2} ms mesh shading: {} {:.2}B tri/sec",
             *frame_cpu_avg,
             *frame_gpu_avg,
-            if rtx_enabled.0 { "ON" } else { "OFF" },
+            if mesh_shader_enabled.0 { "ON" } else { "OFF" },
             triangles_per_sec / 1e9,
         );
     }
@@ -382,8 +382,11 @@ fn resize(mut events: EventReader<WindowResized>, mut cendre: ResMut<CendreInsta
     }
 }
 
-fn toggle_rtx(mut rtx_enabled: ResMut<RTXEnabled>, key_input: Res<Input<KeyCode>>) {
+fn toggle_mesh_shader(
+    mut mesh_shader_enabled: ResMut<MeshShaderEnabled>,
+    key_input: Res<Input<KeyCode>>,
+) {
     if key_input.just_pressed(KeyCode::R) {
-        rtx_enabled.0 = !rtx_enabled.0;
+        mesh_shader_enabled.0 = !mesh_shader_enabled.0;
     }
 }
