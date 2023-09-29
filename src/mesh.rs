@@ -119,13 +119,13 @@ fn build_meshlets(vertices: &[Vertex], indices: &[u32]) -> (Vec<Meshlet>, Vec<u3
 pub struct VertexBuffer(pub Buffer);
 #[derive(Component, Deref)]
 pub struct IndexBuffer(pub Buffer);
-#[derive(Component, Deref)]
-pub struct MeshletBuffer(pub Buffer);
-#[derive(Component, Deref)]
-pub struct MeshletDataBuffer(pub Buffer);
 
 #[derive(Component)]
-pub struct MeshletsCount(pub u32);
+pub struct Meshlets {
+    pub buffer: Buffer,
+    pub data_buffer: Buffer,
+    pub count: u32,
+}
 
 #[derive(Component)]
 pub struct PreparedMesh;
@@ -235,11 +235,11 @@ pub fn prepare_mesh(
                     .collect::<Vec<_>>(),
             );
 
-            entity_cmd.insert((
-                MeshletBuffer(meshlet_buffer),
-                MeshletsCount(meshlets.len() as u32),
-                MeshletDataBuffer(meshlet_data_buffer),
-            ));
+            entity_cmd.insert(Meshlets {
+                buffer: meshlet_buffer,
+                data_buffer: meshlet_data_buffer,
+                count: meshlets.len() as u32,
+            });
         }
 
         entity_cmd.insert(PreparedMesh);

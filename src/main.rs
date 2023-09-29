@@ -26,10 +26,7 @@ use bevy::{
 };
 use cendre::{
     instance::{CendreInstance, Pipeline, Program},
-    mesh::{
-        prepare_mesh, IndexBuffer, Mesh, MeshDraw, MeshletBuffer, MeshletDataBuffer, MeshletsCount,
-        VertexBuffer,
-    },
+    mesh::{prepare_mesh, IndexBuffer, Mesh, MeshDraw, Meshlets, VertexBuffer},
     obj_loader::{ObjBundle, ObjLoaderPlugin},
     MeshShaderEnabled,
 };
@@ -183,14 +180,7 @@ fn update(
     cendre_pipeline: Res<CendrePipeline>,
     cendre_pipeline_mesh_shader: Option<Res<CendrePipelineMeshShader>>,
     mut windows: Query<&mut Window>,
-    meshes: Query<(
-        &Mesh,
-        &VertexBuffer,
-        &IndexBuffer,
-        Option<&MeshletBuffer>,
-        Option<&MeshletsCount>,
-        Option<&MeshletDataBuffer>,
-    )>,
+    meshes: Query<(&Mesh, &VertexBuffer, &IndexBuffer, Option<&Meshlets>)>,
     mut frame_gpu_avg: Local<f64>,
     mut frame_cpu_avg: Local<f64>,
     mesh_shader_enabled: Res<MeshShaderEnabled>,
@@ -268,24 +258,18 @@ fn update(
             });
         }
 
-        for (mesh, vb, ib, mb, meshlets_count, mdb) in &meshes {
+        for (mesh, vb, ib, meshlets) in &meshes {
             triangle_count += (mesh.indices.len() / 3) * draw_count;
 
             if mesh_shader {
-                let Some(mb) = mb else {
-                    continue;
-                };
-                let Some(meshlets_count) = meshlets_count else {
-                    continue;
-                };
-                let Some(mdb) = mdb else {
+                let Some(meshlets) = meshlets else {
                     continue;
                 };
 
                 let descriptors = [
                     vb.descriptor_info(0),
-                    mb.descriptor_info(0),
-                    mdb.descriptor_info(0),
+                    meshlets.buffer.descriptor_info(0),
+                    meshlets.data_buffer.descriptor_info(0),
                 ];
                 cendre.push_descriptor_set_with_template(
                     command_buffer,
@@ -301,7 +285,7 @@ fn update(
                         0,
                         bytemuck::bytes_of(draw),
                     );
-                    cendre.draw_mesh_tasks(command_buffer, meshlets_count.0 / 32, 0);
+                    cendre.draw_mesh_tasks(command_buffer, meshlets.count / 32, 0);
                 }
             } else {
                 let descriptors = [vb.descriptor_info(0)];
