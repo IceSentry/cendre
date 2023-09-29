@@ -978,7 +978,7 @@ impl CendreInstance {
         let (swapchain_images, swapchain_image_views, framebuffers) = create_swapchain_resources(
             &self.device,
             &self.swapchain_loader,
-            self.swapchain_khr,
+            new_swapchain_khr,
             self.render_pass,
             self.surface_format,
             width,
@@ -987,6 +987,9 @@ impl CendreInstance {
 
         unsafe { self.device.device_wait_idle().unwrap() };
         self.destroy_swapchain();
+
+        self.swapchain_width = width;
+        self.swapchain_height = height;
 
         self.swapchain_khr = new_swapchain_khr;
         self.swapchain_images = swapchain_images;
