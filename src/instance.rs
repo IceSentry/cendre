@@ -1177,17 +1177,14 @@ impl Drop for CendreInstance {
                 self.device
                     .destroy_shader_module(*module.lock().unwrap(), None);
             }
-            for image in &self.images {
-                self.device.destroy_image(*image.lock().unwrap(), None);
-            }
-
-            for image in &self.swapchain_images {
-                self.device.destroy_image(*image, None);
-            }
 
             for image_view in &self.image_views {
                 self.device
                     .destroy_image_view(*image_view.lock().unwrap(), None);
+            }
+
+            for image in &self.images {
+                self.device.destroy_image(*image.lock().unwrap(), None);
             }
 
             self.device.destroy_render_pass(self.render_pass, None);
